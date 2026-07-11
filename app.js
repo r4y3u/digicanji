@@ -5,12 +5,14 @@
   const resultBox = document.querySelector("#recognized-text");
   const clearButton = document.querySelector("#clear-button");
   const context = canvas.getContext("2d");
+  const strokeCounts = window.JP_STROKE_COUNTS || {};
 
   const LANGUAGE_CANDIDATES = [{ languages: ["ja"] }, { languages: ["ja-JP"] }];
   const SUPPORTED_POINTER_TYPES = new Set(["mouse", "touch", "stylus"]);
   const LINE_WIDTH = 10;
-  const STROKE_COMPLETION_DELAY_MS = 1100;
-  const RECOGNITION_RETRY_DELAY_MS = 180;
+  const RECOGNITION_DRAW_DELAY_MS = 140;
+  const RECOGNITION_FINISH_DELAY_MS = 70;
+  const RECOGNITION_RETRY_DELAY_MS = 120;
   const GOOGLE_HANDWRITING_URLS = [
     "https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
     "https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
@@ -213,16 +215,18 @@
     const drawing = ensureNativeDrawing();
 
     if (!drawing) {
-      return "";
+      return [];
     }
 
     try {
       const predictions = await drawing.getPrediction();
-      return predictions?.[0]?.text?.trim() || "";
+      return normalizeCandidates(
+        predictions?.map((prediction) => prediction?.text) || [],
+      );
     } catch {
       state.nativeFailed = true;
       state.nativeDrawing = null;
-      return "";
+      return [];
     }
   }
 
@@ -254,9 +258,9 @@
     return response.json();
   }
 
-  function extractCandidateFromGoogleResponse(data) {
+  function extractCandidatesFromGoogleResponse(data) {
     if (!Array.isArray(data) || data[0] !== "SUCCESS") {
-      return "";
+      return [];
     }
 
     const candidates = [];
@@ -276,12 +280,7 @@
     }
 
     walk(data[1]);
-
-    return (
-      candidates.find((text) => /[\u3040-\u30ff\u3400-\u9fff]/u.test(text)) ||
-      candidates[0] ||
-      ""
-    );
+    return normalizeCandidates(candidates);
   }
 
   async function recognizeWithGoogle() {
@@ -307,11 +306,11 @@
       for (const contentType of contentTypes) {
         try {
           const data = await postGooglePayload(url, payload, contentType);
-          const text = extractCandidateFromGoogleResponse(data);
+          const candidates = extractCandidatesFromGoogleResponse(data);
 
-          if (text) {
+          if (candidates.length > 0) {
             state.googleFailed = false;
-            return text;
+            return candidates;
           }
         } catch {
           // Try the next endpoint/content-type pair.
@@ -320,7 +319,191 @@
     }
 
     state.googleFailed = true;
-    return "";
+    return [];
+  }
+
+  function normalizeCandidates(candidates) {
+    const seen = new Set();
+    const normalized = [];
+
+    for (const candidate of candidates) {
+      const text = String(candidate || "").trim();
+
+      if (!text || seen.has(text)) {
+        continue;
+      }
+
+      seen.add(text);
+      normalized.push(text);
+    }
+
+    return normalized;
+  }
+
+  function getCandidateStrokeCount(text) {
+    let total = 0;
+
+    for (const char of Array.from(text)) {
+      const count = strokeCounts[char];
+
+      if (!Number.isFinite(count)) {
+        return null;
+      }
+
+      total += count;
+    }
+
+    return total || null;
+  }
+
+  function isKanaOnly(text) {
+    return /^[\u3040-\u30ffー]+$/u.test(text);
+  }
+
+  function getStrokeTolerance(expectedCount, text) {
+    if (isKanaOnly(text)) {
+      return 1;
+    }
+
+    if (expectedCount >= 12) {
+      return 1;
+    }
+
+    return expectedCount >= 6 ? 1 : 0;
+  }
+
+  function getStrokeLength(stroke) {
+    let length = 0;
+
+    for (let index = 1; index < stroke.length; index += 1) {
+      length += getDistance(stroke[index - 1], stroke[index]);
+    }
+
+    return length;
+  }
+
+  function getDistance(a, b) {
+    return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  function simplifyStroke(stroke, minDistance) {
+    if (stroke.length <= 2) {
+      return stroke.slice();
+    }
+
+    const simplified = [stroke[0]];
+    let last = stroke[0];
+
+    for (let index = 1; index < stroke.length - 1; index += 1) {
+      const point = stroke[index];
+
+      if (getDistance(last, point) >= minDistance) {
+        simplified.push(point);
+        last = point;
+      }
+    }
+
+    simplified.push(stroke[stroke.length - 1]);
+    return simplified;
+  }
+
+  function estimateSegmentsInStroke(stroke, guide) {
+    if (stroke.length < 2) {
+      return 0;
+    }
+
+    const diagonal = Math.hypot(guide.width, guide.height);
+    const minPointDistance = Math.max(7, diagonal * 0.012);
+    const minSectionLength = Math.max(24, diagonal * 0.04);
+    const simplified = simplifyStroke(stroke, minPointDistance);
+
+    if (simplified.length < 3) {
+      return 1;
+    }
+
+    let segments = 1;
+    let distanceSinceBreak = 0;
+    let remainingLength = 0;
+    const lengths = [];
+
+    for (let index = 1; index < simplified.length; index += 1) {
+      const length = getDistance(simplified[index - 1], simplified[index]);
+      lengths.push(length);
+      remainingLength += length;
+    }
+
+    for (let index = 1; index < simplified.length - 1; index += 1) {
+      const before = simplified[index - 1];
+      const current = simplified[index];
+      const after = simplified[index + 1];
+      const lenA = getDistance(before, current);
+      const lenB = getDistance(current, after);
+
+      distanceSinceBreak += lengths[index - 1] || 0;
+      remainingLength -= lengths[index - 1] || 0;
+
+      if (lenA < minPointDistance || lenB < minPointDistance) {
+        continue;
+      }
+
+      const dot =
+        (current.x - before.x) * (after.x - current.x) +
+        (current.y - before.y) * (after.y - current.y);
+      const ratio = Math.max(-1, Math.min(1, dot / (lenA * lenB)));
+      const turn = Math.acos(ratio);
+
+      if (
+        turn > Math.PI * 0.58 &&
+        distanceSinceBreak >= minSectionLength &&
+        remainingLength >= minSectionLength
+      ) {
+        segments += 1;
+        distanceSinceBreak = 0;
+      }
+    }
+
+    return Math.max(1, segments);
+  }
+
+  function estimateInputStrokeCount() {
+    const guide = getCanvasGuide();
+    const rawCount = state.strokes.filter((stroke) => stroke.length > 1).length;
+    const virtualCount = state.strokes.reduce((total, stroke) => {
+      return total + estimateSegmentsInStroke(stroke, guide);
+    }, 0);
+
+    return Math.max(rawCount, virtualCount);
+  }
+
+  function isStrokeCompatible(text, estimatedCount) {
+    const expectedCount = getCandidateStrokeCount(text);
+
+    if (!expectedCount) {
+      return true;
+    }
+
+    const tolerance = getStrokeTolerance(expectedCount, text);
+    return estimatedCount + tolerance >= expectedCount;
+  }
+
+  function selectDisplayCandidate(candidates) {
+    const normalized = normalizeCandidates(candidates);
+
+    if (normalized.length === 0) {
+      return "";
+    }
+
+    const japaneseCandidates = normalized.filter((text) =>
+      /[\u3040-\u30ff\u3400-\u9fff]/u.test(text),
+    );
+    const orderedCandidates =
+      japaneseCandidates.length > 0 ? japaneseCandidates : normalized;
+    const estimatedCount = estimateInputStrokeCount();
+
+    return (
+      orderedCandidates.find((text) => isStrokeCompatible(text, estimatedCount)) ||
+      ""
+    );
   }
 
   function startStroke(event) {
@@ -339,6 +522,7 @@
 
     addPoint(event);
     setBusy(true);
+    scheduleRecognition(RECOGNITION_DRAW_DELAY_MS);
   }
 
   function addPoint(event) {
@@ -365,6 +549,7 @@
         : [event];
 
     events.forEach(addPoint);
+    scheduleRecognition(RECOGNITION_DRAW_DELAY_MS);
   }
 
   function finishStroke(event) {
@@ -384,7 +569,7 @@
     state.activePointerId = null;
     state.activeStrokePoints = null;
     state.lastPoint = null;
-    scheduleRecognition(STROKE_COMPLETION_DELAY_MS);
+    scheduleRecognition(RECOGNITION_FINISH_DELAY_MS);
   }
 
   function scheduleRecognition(delay) {
@@ -411,8 +596,12 @@
     const serial = ++state.recognitionSerial;
 
     try {
-      const nativeText = await recognizeWithNative();
-      const text = nativeText || (await recognizeWithGoogle());
+      const nativeCandidates = await recognizeWithNative();
+      let text = selectDisplayCandidate(nativeCandidates);
+
+      if (!text) {
+        text = selectDisplayCandidate(await recognizeWithGoogle());
+      }
 
       if (serial !== state.recognitionSerial || !hasInk()) {
         return;
