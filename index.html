@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Japanese Handwriting Pad</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="./app.js" defer></script>
+  </head>
+  <body>
+    <main class="app" aria-labelledby="app-title">
+      <h1 id="app-title" class="visually-hidden">手書き認識パッド</h1>
+
+      <output id="recognized-text" class="result-box" aria-live="polite">
+        準備中...
+      </output>
+
+      <canvas
+        id="handwriting-pad"
+        aria-label="手書き入力パッド"
+      ></canvas>
+
+      <button id="clear-button" class="clear-button" type="button">
+        クリア
+      </button>
+    </main>
+  </body>
+</html>
