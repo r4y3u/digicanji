@@ -9,6 +9,8 @@
   const LANGUAGE_CANDIDATES = [{ languages: ["ja"] }, { languages: ["ja-JP"] }];
   const SUPPORTED_POINTER_TYPES = new Set(["mouse", "touch", "stylus"]);
   const LINE_WIDTH = 10;
+  const STROKE_COMPLETION_DELAY_MS = 1100;
+  const RECOGNITION_RETRY_DELAY_MS = 180;
   const GOOGLE_HANDWRITING_URLS = [
     "https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
     "https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
@@ -323,6 +325,8 @@
 
   function startStroke(event) {
     canvas.dataset.lastPointerType = event.pointerType || "";
+    window.clearTimeout(state.recognitionTimer);
+    state.recognitionSerial += 1;
     state.strokeStartTime = performance.now();
     state.activePointerId = event.pointerId;
     state.activeStrokePoints = [];
@@ -335,7 +339,6 @@
 
     addPoint(event);
     setBusy(true);
-    scheduleRecognition(420);
   }
 
   function addPoint(event) {
@@ -362,7 +365,6 @@
         : [event];
 
     events.forEach(addPoint);
-    scheduleRecognition(360);
   }
 
   function finishStroke(event) {
@@ -382,7 +384,7 @@
     state.activePointerId = null;
     state.activeStrokePoints = null;
     state.lastPoint = null;
-    scheduleRecognition(120);
+    scheduleRecognition(STROKE_COMPLETION_DELAY_MS);
   }
 
   function scheduleRecognition(delay) {
@@ -427,9 +429,13 @@
     } finally {
       state.isRecognizing = false;
 
+      if (serial !== state.recognitionSerial) {
+        return;
+      }
+
       if (state.needsRecognition) {
         state.needsRecognition = false;
-        scheduleRecognition(160);
+        scheduleRecognition(RECOGNITION_RETRY_DELAY_MS);
       } else {
         setBusy(false);
       }
