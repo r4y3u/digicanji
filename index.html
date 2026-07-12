@@ -15,16 +15,29 @@
     <main class="app" aria-labelledby="app-title">
       <h1 id="app-title" class="visually-hidden">手書き認識パッド</h1>
 
-      <output id="recognized-text" class="result-box" aria-live="polite">
-        準備中...
-      </output>
+      <section class="character-panel" aria-label="文字表示エリア">
+        <div class="mode-panel">
+          <label class="mode-label" for="slot-mode">文字枠</label>
+          <select id="slot-mode" class="mode-select" aria-label="文字枠数">
+            <option value="1" selected>１</option>
+            <option value="2">２</option>
+            <option value="3">３</option>
+            <option value="4">４</option>
+            <option value="free">フリー</option>
+          </select>
+        </div>
+
+        <output id="recognized-text" class="result-box" aria-live="polite">
+          準備中...
+        </output>
+      </section>
 
       <canvas
         id="handwriting-pad"
         aria-label="手書き入力パッド"
       ></canvas>
 
-      <div class="actions" aria-label="操作">
+      <div class="actions" aria-label="操作" data-slot-mode="slots">
         <button
           id="undo-button"
           class="action-button undo-button"
@@ -36,6 +49,23 @@
         </button>
         <button id="clear-button" class="action-button clear-button" type="button">
           クリア
+        </button>
+        <button
+          id="prev-slot-button"
+          class="action-button slot-nav-button prev-slot-button"
+          type="button"
+          aria-label="左の文字枠へ移動"
+          disabled
+        >
+          ◁
+        </button>
+        <button
+          id="next-slot-button"
+          class="action-button slot-nav-button next-slot-button"
+          type="button"
+          aria-label="右の文字枠へ移動"
+        >
+          ▷
         </button>
       </div>
     </main>

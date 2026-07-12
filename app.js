@@ -5,6 +5,10 @@
   const resultBox = document.querySelector("#recognized-text");
   const clearButton = document.querySelector("#clear-button");
   const undoButton = document.querySelector("#undo-button");
+  const slotModeSelect = document.querySelector("#slot-mode");
+  const prevSlotButton = document.querySelector("#prev-slot-button");
+  const nextSlotButton = document.querySelector("#next-slot-button");
+  const actions = document.querySelector(".actions");
   const context = canvas.getContext("2d");
   const strokeCounts = window.JP_STROKE_COUNTS || {};
 
@@ -31,6 +35,15 @@
     "https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
     "https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
   ];
+
+  function createInputRecord() {
+    return {
+      strokes: [],
+      text: "",
+      message: "",
+      state: "message",
+    };
+  }
   const SHINNYOU_CHARS = new Set(
     Array.from(
       "込辻迂迄迅迎近返迫迭述迷追退送逃逆途透逐逓通逝速造逢連逮週進逸遅遇遊運遍過道達違遠遣適遭遮遷選遺避還邁辺邊迦迩逗這逞逡逵逶逹遁遂遜遼遽邂邃邇邉",
@@ -48,6 +61,10 @@
     activeStrokePoints: null,
     lastPoint: null,
     strokeStartTime: 0,
+    slotMode: 1,
+    activeSlotIndex: 0,
+    slots: Array.from({ length: 4 }, createInputRecord),
+    freeInput: createInputRecord(),
     strokes: [],
     recognitionTimer: 0,
     recognitionSerial: 0,
@@ -75,9 +92,113 @@
     networkUnavailable: "描画はできますが、認識に接続できません",
   };
 
+  state.strokes = state.slots[0].strokes;
+
+  function isFreeMode() {
+    return state.slotMode === "free";
+  }
+
+  function getVisibleSlotCount() {
+    return isFreeMode() ? 0 : Math.max(1, Math.min(4, Number(state.slotMode) || 1));
+  }
+
+  function getActiveInputRecord() {
+    return isFreeMode() ? state.freeInput : state.slots[state.activeSlotIndex];
+  }
+
+  function forEachInputRecord(callback) {
+    state.slots.forEach(callback);
+    callback(state.freeInput);
+  }
+
+  function refreshActiveStrokesReference() {
+    state.strokes = getActiveInputRecord().strokes;
+  }
+
+  function getLiveResultText() {
+    if (isFreeMode()) {
+      const record = state.freeInput;
+      return record.text || record.message || messages.empty;
+    }
+
+    const count = getVisibleSlotCount();
+    const chars = state.slots
+      .slice(0, count)
+      .map((record) => record.text || "□")
+      .join("");
+
+    return chars || messages.empty;
+  }
+
+  function renderResultArea() {
+    resultBox.replaceChildren();
+    resultBox.dataset.mode = isFreeMode() ? "free" : "slots";
+
+    if (isFreeMode()) {
+      const record = state.freeInput;
+      resultBox.dataset.state = record.text ? "" : "message";
+      resultBox.textContent = record.text || record.message || messages.empty;
+      resultBox.setAttribute("aria-label", getLiveResultText());
+      return;
+    }
+
+    const count = getVisibleSlotCount();
+    resultBox.dataset.state = "slots";
+    const grid = document.createElement("span");
+    grid.className = "slot-grid";
+    grid.style.setProperty("--slot-count", String(count));
+
+    for (let index = 0; index < count; index += 1) {
+      const record = state.slots[index];
+      const slot = document.createElement("span");
+      slot.className = "character-slot";
+      slot.dataset.index = String(index);
+
+      if (index === state.activeSlotIndex) {
+        slot.classList.add("is-active");
+      }
+
+      if (record.text) {
+        slot.textContent = record.text;
+      } else if (index === state.activeSlotIndex && record.message && record.message !== messages.empty) {
+        const message = document.createElement("span");
+        message.className = "slot-message";
+        message.textContent = record.message;
+        slot.append(message);
+      }
+
+      grid.append(slot);
+    }
+
+    resultBox.append(grid);
+    resultBox.setAttribute("aria-label", getLiveResultText());
+  }
+
   function setResult(text, stateName = "result") {
-    resultBox.textContent = text;
-    resultBox.dataset.state = stateName === "result" ? "" : "message";
+    const record = getActiveInputRecord();
+
+    if (stateName === "result") {
+      record.text = text;
+      record.message = "";
+      record.state = "result";
+    } else {
+      record.message = text;
+      record.state = "message";
+
+      if (text !== messages.empty && text !== messages.loading) {
+        record.text = "";
+      }
+    }
+
+    renderResultArea();
+  }
+
+  function clearActiveRecognition() {
+    const record = getActiveInputRecord();
+    record.text = "";
+    record.message = "";
+    record.state = "message";
+    renderResultArea();
   }
 
   function setBusy(isBusy) {
@@ -116,10 +237,12 @@
       return;
     }
 
-    state.strokes.forEach((stroke) => {
-      stroke.forEach((point) => {
-        point.x *= scaleX;
-        point.y *= scaleY;
+    forEachInputRecord((record) => {
+      record.strokes.forEach((stroke) => {
+        stroke.forEach((point) => {
+          point.x *= scaleX;
+          point.y *= scaleY;
+        });
       });
     });
 
@@ -979,6 +1102,7 @@
     state.lastPoint = null;
     state.strokes.push(state.activeStrokePoints);
     resetCandidateStability();
+    clearActiveRecognition();
     updateActionButtons();
 
     addPreparedPoint(state.pendingStartPoint);
@@ -1170,7 +1294,19 @@
   }
 
   function updateActionButtons() {
+    const slotMode = isFreeMode() ? "free" : "slots";
+    actions.dataset.slotMode = slotMode;
     undoButton.disabled = state.strokes.length === 0;
+
+    if (isFreeMode()) {
+      prevSlotButton.disabled = true;
+      nextSlotButton.disabled = true;
+      return;
+    }
+
+    const count = getVisibleSlotCount();
+    prevSlotButton.disabled = state.activeSlotIndex <= 0;
+    nextSlotButton.disabled = state.activeSlotIndex >= count - 1;
   }
 
   function resetNativeDrawing() {
@@ -1189,6 +1325,46 @@
     state.lastPoint = null;
   }
 
+  function activateCurrentInput({ recognizeIfNeeded = true } = {}) {
+    window.clearTimeout(state.recognitionTimer);
+    state.recognitionSerial += 1;
+    resetPointerState();
+    resetNativeDrawing();
+    resetCandidateStability();
+    refreshActiveStrokesReference();
+    drawAllStrokes();
+    renderResultArea();
+    updateActionButtons();
+    setBusy(false);
+
+    if (recognizeIfNeeded && hasMeaningfulInk() && !getActiveInputRecord().text) {
+      setBusy(true);
+      scheduleRecognition(RECOGNITION_FINISH_DELAY_MS);
+    }
+  }
+
+  function setSlotMode(value) {
+    state.slotMode = value === "free" ? "free" : Math.max(1, Math.min(4, Number(value) || 1));
+    state.activeSlotIndex = 0;
+    activateCurrentInput();
+  }
+
+  function moveSlot(delta) {
+    if (isFreeMode()) {
+      return;
+    }
+
+    const count = getVisibleSlotCount();
+    const nextIndex = Math.max(0, Math.min(count - 1, state.activeSlotIndex + delta));
+
+    if (nextIndex === state.activeSlotIndex) {
+      return;
+    }
+
+    state.activeSlotIndex = nextIndex;
+    activateCurrentInput();
+  }
+
   function undoLastStroke() {
     if (state.strokes.length === 0) {
       return;
@@ -1200,6 +1376,7 @@
     resetNativeDrawing();
     resetCandidateStability();
     state.strokes.pop();
+    clearActiveRecognition();
     drawAllStrokes();
     updateActionButtons();
 
@@ -1218,7 +1395,12 @@
     resetPointerState();
     resetNativeDrawing();
     resetCandidateStability();
-    state.strokes = [];
+    const record = getActiveInputRecord();
+    record.strokes.length = 0;
+    record.text = "";
+    record.message = "";
+    record.state = "message";
+    refreshActiveStrokesReference();
 
     clearCanvas();
     updateActionButtons();
@@ -1264,6 +1446,9 @@
   });
   undoButton.addEventListener("click", undoLastStroke);
   clearButton.addEventListener("click", clearPad);
+  slotModeSelect.addEventListener("change", () => setSlotMode(slotModeSelect.value));
+  prevSlotButton.addEventListener("click", () => moveSlot(-1));
+  nextSlotButton.addEventListener("click", () => moveSlot(1));
   window.addEventListener("keydown", handleKeyDown);
 
   window.addEventListener("pagehide", () => {
