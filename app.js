@@ -31,6 +31,19 @@
     "鱸": 27,
   });
 
+  const STRUCTURAL_ALTERNATIVE_RULES = Object.freeze([
+    {
+      source: "晴",
+      target: "睛",
+      test: hasLikelyLeftEyeComponent,
+    },
+    {
+      source: "錆",
+      target: "鯖",
+      test: hasLikelyLeftFishComponent,
+    },
+  ]);
+
   const GOOGLE_HANDWRITING_URLS = [
     "https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
     "https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
@@ -69,6 +82,7 @@
     recognitionTimer: 0,
     recognitionSerial: 0,
     isRecognizing: false,
+    isBusyIndicatorVisible: false,
     needsRecognition: false,
     nativeFailed: false,
     googleFailed: false,
@@ -139,6 +153,7 @@
       resultBox.dataset.state = record.text ? "" : "message";
       resultBox.textContent = record.text || record.message || messages.empty;
       resultBox.setAttribute("aria-label", getLiveResultText());
+      updateBusyIndicator();
       return;
     }
 
@@ -172,6 +187,7 @@
 
     resultBox.append(grid);
     resultBox.setAttribute("aria-label", getLiveResultText());
+    updateBusyIndicator();
   }
 
   function setResult(text, stateName = "result") {
@@ -201,8 +217,24 @@
     renderResultArea();
   }
 
+  function updateBusyIndicator() {
+    const isBusy = Boolean(state.isBusyIndicatorVisible);
+
+    if (isFreeMode()) {
+      resultBox.dataset.busy = isBusy ? "true" : "false";
+      return;
+    }
+
+    resultBox.dataset.busy = "false";
+    resultBox.querySelectorAll(".character-slot").forEach((slot) => {
+      const index = Number(slot.dataset.index);
+      slot.dataset.busy = isBusy && index === state.activeSlotIndex ? "true" : "false";
+    });
+  }
+
   function setBusy(isBusy) {
-    resultBox.dataset.busy = isBusy ? "true" : "false";
+    state.isBusyIndicatorVisible = Boolean(isBusy);
+    updateBusyIndicator();
   }
 
   function resizeCanvas() {
@@ -395,7 +427,7 @@
 
     if (!state.nativeDrawing) {
       const hints = {
-        recognitionType: "per-character",
+        recognitionType: isFreeMode() ? "text" : "per-character",
         inputType: getInputType(),
         alternatives: 1,
       };
@@ -611,6 +643,14 @@
     );
   }
 
+  function getCharacterLength(text) {
+    return Array.from(text).length;
+  }
+
+  function isAllowedCandidateForCurrentMode(text) {
+    return isFreeMode() || getCharacterLength(text) === 1;
+  }
+
   function getStrokeTolerance(expectedCount, text) {
     if (isKanaOnly(text)) {
       return 1;
@@ -660,6 +700,166 @@
       width: Math.max(1, bounds.right - bounds.left),
       height: Math.max(1, bounds.bottom - bounds.top),
     };
+  }
+
+  function clusterNumericBands(values, minGap) {
+    const sorted = values
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    const clusters = [];
+
+    sorted.forEach((value) => {
+      const cluster = clusters[clusters.length - 1];
+
+      if (!cluster || value - cluster.center > minGap) {
+        clusters.push({ center: value, count: 1 });
+        return;
+      }
+
+      cluster.center = (cluster.center * cluster.count + value) / (cluster.count + 1);
+      cluster.count += 1;
+    });
+
+    return clusters;
+  }
+
+  function getStrokeFeatures() {
+    return state.strokes
+      .filter((stroke) => stroke.length > 1)
+      .map((stroke) => {
+        const xs = stroke.map((point) => point.x);
+        const ys = stroke.map((point) => point.y);
+        const left = Math.min(...xs);
+        const right = Math.max(...xs);
+        const top = Math.min(...ys);
+        const bottom = Math.max(...ys);
+
+        return {
+          left,
+          right,
+          top,
+          bottom,
+          width: Math.max(1, right - left),
+          height: Math.max(1, bottom - top),
+          centerX: (left + right) / 2,
+          centerY: (top + bottom) / 2,
+          length: getStrokeLength(stroke),
+          start: stroke[0],
+          end: stroke[stroke.length - 1],
+        };
+      });
+  }
+
+  function getSegmentFeatures(bounds = getInkBounds()) {
+    if (!bounds) {
+      return [];
+    }
+
+    const guide = getCanvasGuide();
+    const diagonal = Math.hypot(guide.width, guide.height);
+    const minPointDistance = Math.max(5, diagonal * 0.008);
+    const minSegmentLength = Math.max(7, diagonal * 0.012);
+    const segments = [];
+
+    state.strokes.forEach((stroke) => {
+      const simplified = simplifyStroke(stroke, minPointDistance);
+
+      for (let index = 1; index < simplified.length; index += 1) {
+        const start = simplified[index - 1];
+        const end = simplified[index];
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = Math.hypot(dx, dy);
+
+        if (length < minSegmentLength) {
+          continue;
+        }
+
+        const left = Math.min(start.x, end.x);
+        const right = Math.max(start.x, end.x);
+        const top = Math.min(start.y, end.y);
+        const bottom = Math.max(start.y, end.y);
+
+        segments.push({
+          start,
+          end,
+          dx,
+          dy,
+          length,
+          left,
+          right,
+          top,
+          bottom,
+          centerX: (start.x + end.x) / 2,
+          centerY: (start.y + end.y) / 2,
+          isHorizontal: Math.abs(dx) >= Math.max(Math.abs(dy) * 1.45, bounds.width * 0.035),
+          isVertical: Math.abs(dy) >= Math.max(Math.abs(dx) * 1.35, bounds.height * 0.05),
+        });
+      }
+    });
+
+    return segments;
+  }
+
+  function hasLikelyLeftEyeComponent() {
+    const bounds = getInkBounds();
+
+    if (!bounds || bounds.width < 1 || bounds.height < 1) {
+      return false;
+    }
+
+    const leftRegionRight = bounds.left + bounds.width * 0.46;
+    const leftRegionHardRight = bounds.left + bounds.width * 0.54;
+    const segments = getSegmentFeatures(bounds);
+    const horizontalBands = clusterNumericBands(
+      segments
+        .filter((segment) => {
+          return (
+            segment.isHorizontal &&
+            segment.length >= Math.max(10, bounds.width * 0.07) &&
+            segment.centerX <= leftRegionRight &&
+            segment.right <= leftRegionHardRight &&
+            segment.centerY >= bounds.top + bounds.height * 0.08 &&
+            segment.centerY <= bounds.bottom - bounds.height * 0.05
+          );
+        })
+        .map((segment) => segment.centerY),
+      Math.max(8, bounds.height * 0.085),
+    );
+
+    const verticals = segments.filter((segment) => {
+      return (
+        segment.isVertical &&
+        segment.centerX <= leftRegionHardRight &&
+        segment.length >= Math.max(12, bounds.height * 0.18)
+      );
+    });
+
+    return horizontalBands.length >= 4 && verticals.length >= 1;
+  }
+
+  function hasLikelyLeftFishComponent() {
+    const bounds = getInkBounds();
+
+    if (!bounds || bounds.width < 1 || bounds.height < 1) {
+      return false;
+    }
+
+    const leftRegionRight = bounds.left + bounds.width * 0.52;
+    const lowerLimit = bounds.top + bounds.height * 0.66;
+    const features = getStrokeFeatures();
+    const lowerDotLikeMarks = features.filter((feature) => {
+      return (
+        feature.centerX <= leftRegionRight &&
+        feature.centerY >= lowerLimit &&
+        feature.length >= 5 &&
+        feature.length <= Math.max(42, bounds.height * 0.24) &&
+        feature.width <= bounds.width * 0.2 &&
+        feature.height <= bounds.height * 0.22
+      );
+    });
+
+    return lowerDotLikeMarks.length >= 3;
   }
 
   function simplifyStroke(stroke, minDistance) {
@@ -962,6 +1162,62 @@
     );
   }
 
+  function canUseStructuralAlternative(rule, strokeStats) {
+    if (typeof rule.test !== "function" || !rule.test(strokeStats)) {
+      return false;
+    }
+
+    return isStrokeCompatible(rule.target, strokeStats);
+  }
+
+  function expandStructuralAlternatives(candidates, strokeStats) {
+    const expanded = [];
+    const seen = new Set();
+
+    function push(text) {
+      if (!seen.has(text)) {
+        seen.add(text);
+        expanded.push(text);
+      }
+    }
+
+    candidates.forEach((candidate) => {
+      STRUCTURAL_ALTERNATIVE_RULES.forEach((rule) => {
+        if (candidate === rule.source && canUseStructuralAlternative(rule, strokeStats)) {
+          push(rule.target);
+        }
+      });
+
+      push(candidate);
+    });
+
+    return expanded;
+  }
+
+  function getCandidateStrokeRank(text, strokeStats, originalIndex) {
+    const expectedCount = getCandidateStrokeCount(text);
+
+    if (!Number.isFinite(expectedCount)) {
+      return 1000 + originalIndex * 0.01;
+    }
+
+    const virtualDistance = Math.abs(strokeStats.virtualCount - expectedCount);
+    const rawDistance = Math.abs(strokeStats.rawCount - expectedCount);
+    const overagePenalty = Math.max(0, strokeStats.rawCount - expectedCount) * 0.35;
+
+    return virtualDistance * 3 + rawDistance * 0.55 + overagePenalty + originalIndex * 0.01;
+  }
+
+  function orderCandidatesByStrokeFit(candidates, strokeStats) {
+    return candidates
+      .map((text, index) => ({
+        text,
+        rank: getCandidateStrokeRank(text, strokeStats, index),
+      }))
+      .sort((a, b) => a.rank - b.rank)
+      .map((entry) => entry.text);
+  }
+
   function selectDisplayCandidate(candidates, strokeStats = estimateInputStrokeStats()) {
     const normalized = normalizeCandidates(candidates);
 
@@ -969,18 +1225,24 @@
       return "";
     }
 
-    const japaneseCandidates = normalized.filter(isJapaneseCandidate);
+    const structurallyExpanded = expandStructuralAlternatives(normalized, strokeStats);
+    const japaneseCandidates = structurallyExpanded
+      .filter(isJapaneseCandidate)
+      .filter(isAllowedCandidateForCurrentMode);
 
     if (japaneseCandidates.length === 0) {
       return "";
     }
 
-    const orderedCandidates = japaneseCandidates;
-
-    return (
-      orderedCandidates.find((text) => isStrokeCompatible(text, strokeStats)) ||
-      ""
+    const compatibleCandidates = japaneseCandidates.filter((text) =>
+      isStrokeCompatible(text, strokeStats),
     );
+
+    if (compatibleCandidates.length === 0) {
+      return "";
+    }
+
+    return orderCandidatesByStrokeFit(compatibleCandidates, strokeStats)[0] || "";
   }
 
   function isPointerInputActive() {
