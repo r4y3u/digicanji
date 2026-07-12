@@ -4,23 +4,46 @@
   const canvas = document.querySelector("#handwriting-pad");
   const resultBox = document.querySelector("#recognized-text");
   const clearButton = document.querySelector("#clear-button");
+  const undoButton = document.querySelector("#undo-button");
   const context = canvas.getContext("2d");
   const strokeCounts = window.JP_STROKE_COUNTS || {};
 
   const LANGUAGE_CANDIDATES = [{ languages: ["ja"] }, { languages: ["ja-JP"] }];
   const SUPPORTED_POINTER_TYPES = new Set(["mouse", "touch", "stylus"]);
-  const LINE_WIDTH = 10;
+  const MIN_LINE_WIDTH = 6;
+  const MAX_LINE_WIDTH = 12;
+  const LINE_WIDTH_RATIO = 0.024;
+  const INK_COLOR = "#f4f0df";
+  const DRAG_START_DISTANCE_MOUSE = 8;
+  const DRAG_START_DISTANCE_TOUCH = 10;
+  const MIN_RECOGNITION_INK_LENGTH = 36;
   const RECOGNITION_DRAW_DELAY_MS = 140;
   const RECOGNITION_FINISH_DELAY_MS = 70;
   const RECOGNITION_RETRY_DELAY_MS = 120;
+  const STABILITY_CONFIRM_DELAY_MS = 260;
+  const STABILITY_MIN_CONFIRMATIONS = 2;
+  const COMPLEX_STROKE_STABILITY_THRESHOLD = 12;
+  const SUPPLEMENTAL_STROKE_COUNTS = Object.freeze({
+    "鱸": 27,
+  });
+
   const GOOGLE_HANDWRITING_URLS = [
     "https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
     "https://inputtools.google.com/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
   ];
+  const SHINNYOU_CHARS = new Set(
+    Array.from(
+      "込辻迂迄迅迎近返迫迭述迷追退送逃逆途透逐逓通逝速造逢連逮週進逸遅遇遊運遍過道達違遠遣適遭遮遷選遺避還邁辺邊迦迩逗這逞逡逵逶逹遁遂遜遼遽邂邃邇邉",
+    ),
+  );
 
   const state = {
     nativeRecognizer: null,
     nativeDrawing: null,
+    pendingPointerId: null,
+    pendingStartPoint: null,
+    pendingStartTime: 0,
+    pendingPointerType: "",
     activePointerId: null,
     activeStrokePoints: null,
     lastPoint: null,
@@ -32,6 +55,17 @@
     needsRecognition: false,
     nativeFailed: false,
     googleFailed: false,
+    nextRecognitionDelay: RECOGNITION_RETRY_DELAY_MS,
+    candidateStability: {
+      text: "",
+      signature: "",
+      firstSeenAt: 0,
+      confirmations: 0,
+    },
+    canvasCssSize: {
+      width: 0,
+      height: 0,
+    },
   };
 
   const messages = {
@@ -52,13 +86,57 @@
 
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, rect.width);
+    const height = Math.max(1, rect.height);
     const ratio = window.devicePixelRatio || 1;
+    const previousSize = state.canvasCssSize;
+    const sizeChanged =
+      Math.abs(previousSize.width - width) > 0.5 ||
+      Math.abs(previousSize.height - height) > 0.5;
 
-    canvas.width = Math.max(1, Math.round(rect.width * ratio));
-    canvas.height = Math.max(1, Math.round(rect.height * ratio));
+    if (sizeChanged && previousSize.width > 0 && previousSize.height > 0) {
+      scaleStoredInk(previousSize, { width, height });
+      resetNativeDrawing();
+      resetCandidateStability();
+    }
+
+    state.canvasCssSize = { width, height };
+    canvas.width = Math.max(1, Math.round(width * ratio));
+    canvas.height = Math.max(1, Math.round(height * ratio));
 
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     drawAllStrokes();
+  }
+
+  function scaleStoredInk(fromSize, toSize) {
+    const scaleX = toSize.width / fromSize.width;
+    const scaleY = toSize.height / fromSize.height;
+
+    if (Math.abs(scaleX - 1) < 0.005 && Math.abs(scaleY - 1) < 0.005) {
+      return;
+    }
+
+    state.strokes.forEach((stroke) => {
+      stroke.forEach((point) => {
+        point.x *= scaleX;
+        point.y *= scaleY;
+      });
+    });
+
+    if (state.pendingStartPoint) {
+      state.pendingStartPoint.x *= scaleX;
+      state.pendingStartPoint.y *= scaleY;
+    }
+  }
+
+  function getLineWidth() {
+    const rect = canvas.getBoundingClientRect();
+    const shorterSide = Math.min(rect.width || 0, rect.height || 0);
+
+    return Math.max(
+      MIN_LINE_WIDTH,
+      Math.min(MAX_LINE_WIDTH, shorterSide * LINE_WIDTH_RATIO),
+    );
   }
 
   function clearCanvas() {
@@ -78,13 +156,15 @@
   function drawPoint(point, previousPoint) {
     context.lineCap = "round";
     context.lineJoin = "round";
-    context.strokeStyle = "#111827";
-    context.fillStyle = "#111827";
-    context.lineWidth = LINE_WIDTH;
+    context.strokeStyle = INK_COLOR;
+    context.fillStyle = INK_COLOR;
+    const lineWidth = getLineWidth();
+
+    context.lineWidth = lineWidth;
 
     if (!previousPoint) {
       context.beginPath();
-      context.arc(point.x, point.y, LINE_WIDTH / 2, 0, Math.PI * 2);
+      context.arc(point.x, point.y, lineWidth / 2, 0, Math.PI * 2);
       context.fill();
       return;
     }
@@ -96,19 +176,42 @@
   }
 
   function getCanvasPoint(event) {
-    const rect = canvas.getBoundingClientRect();
-    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
-    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+    const point = getCanvasCoordinates(event);
 
     return {
-      x,
-      y,
+      ...point,
       t: Math.round(performance.now() - state.strokeStartTime),
     };
   }
 
+  function getCanvasCoordinates(event) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+
+    return { x, y };
+  }
+
   function hasInk() {
     return state.strokes.some((stroke) => stroke.length > 1);
+  }
+
+  function getTotalInkLength() {
+    return state.strokes.reduce((total, stroke) => total + getStrokeLength(stroke), 0);
+  }
+
+  function hasMeaningfulInk() {
+    const bounds = getInkBounds();
+
+    if (!bounds) {
+      return false;
+    }
+
+    return (
+      hasInk() &&
+      getTotalInkLength() >= MIN_RECOGNITION_INK_LENGTH &&
+      Math.max(bounds.width, bounds.height) >= MIN_RECOGNITION_INK_LENGTH * 0.55
+    );
   }
 
   function getCanvasGuide() {
@@ -340,11 +443,19 @@
     return normalized;
   }
 
+  function getCharStrokeCount(char) {
+    const count = Number.isFinite(strokeCounts[char])
+      ? strokeCounts[char]
+      : SUPPLEMENTAL_STROKE_COUNTS[char];
+
+    return Number.isFinite(count) ? count : null;
+  }
+
   function getCandidateStrokeCount(text) {
     let total = 0;
 
     for (const char of Array.from(text)) {
-      const count = strokeCounts[char];
+      const count = getCharStrokeCount(char);
 
       if (!Number.isFinite(count)) {
         return null;
@@ -356,8 +467,25 @@
     return total || null;
   }
 
+  function isCjkIdeograph(char) {
+    return /^[\u3400-\u9fff]$/u.test(char);
+  }
+
+  function hasUnknownKanjiStrokeCount(text) {
+    return Array.from(text).some((char) => {
+      return isCjkIdeograph(char) && !Number.isFinite(getCharStrokeCount(char));
+    });
+  }
+
   function isKanaOnly(text) {
     return /^[\u3040-\u30ffー]+$/u.test(text);
+  }
+
+  function isJapaneseCandidate(text) {
+    return (
+      /[\u3040-\u30ff\u3400-\u9fff]/u.test(text) &&
+      /^[\u3040-\u30ff\u3400-\u9fff々〆〤ヶヵー]+$/u.test(text)
+    );
   }
 
   function getStrokeTolerance(expectedCount, text) {
@@ -365,11 +493,7 @@
       return 1;
     }
 
-    if (expectedCount >= 12) {
-      return 1;
-    }
-
-    return expectedCount >= 6 ? 1 : 0;
+    return 0;
   }
 
   function getStrokeLength(stroke) {
@@ -384,6 +508,35 @@
 
   function getDistance(a, b) {
     return Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  function getInkBounds() {
+    const points = state.strokes.flat().filter(Boolean);
+
+    if (points.length === 0) {
+      return null;
+    }
+
+    const bounds = points.reduce(
+      (acc, point) => ({
+        left: Math.min(acc.left, point.x),
+        right: Math.max(acc.right, point.x),
+        top: Math.min(acc.top, point.y),
+        bottom: Math.max(acc.bottom, point.y),
+      }),
+      {
+        left: Infinity,
+        right: -Infinity,
+        top: Infinity,
+        bottom: -Infinity,
+      },
+    );
+
+    return {
+      ...bounds,
+      width: Math.max(1, bounds.right - bounds.left),
+      height: Math.max(1, bounds.bottom - bounds.top),
+    };
   }
 
   function simplifyStroke(stroke, minDistance) {
@@ -465,64 +618,391 @@
     return Math.max(1, segments);
   }
 
-  function estimateInputStrokeCount() {
+  function estimateInputStrokeStats() {
     const guide = getCanvasGuide();
     const rawCount = state.strokes.filter((stroke) => stroke.length > 1).length;
     const virtualCount = state.strokes.reduce((total, stroke) => {
       return total + estimateSegmentsInStroke(stroke, guide);
     }, 0);
 
-    return Math.max(rawCount, virtualCount);
+    return {
+      rawCount,
+      virtualCount: Math.max(rawCount, virtualCount),
+    };
   }
 
-  function isStrokeCompatible(text, estimatedCount) {
+  function hasShinnyouChar(text) {
+    return Array.from(text).some((char) => SHINNYOU_CHARS.has(char));
+  }
+
+  function hasCompletedShinnyouSweep() {
+    const bounds = getInkBounds();
+
+    if (!bounds || bounds.width < 1 || bounds.height < 1) {
+      return false;
+    }
+
+    const guide = getCanvasGuide();
+    const diagonal = Math.hypot(guide.width, guide.height);
+    const minPointDistance = Math.max(7, diagonal * 0.012);
+    const bottomBandTop = bounds.top + bounds.height * 0.68;
+    const minSweepDx = Math.max(bounds.width * 0.5, guide.width * 0.15);
+
+    for (const stroke of state.strokes) {
+      const simplified = simplifyStroke(stroke, minPointDistance);
+      let runDx = 0;
+      let runStartX = null;
+      let runEndX = null;
+
+      for (let index = 1; index < simplified.length; index += 1) {
+        const before = simplified[index - 1];
+        const after = simplified[index];
+        const dx = after.x - before.x;
+        const dy = after.y - before.y;
+        const midY = (before.y + after.y) / 2;
+        const isBottom = midY >= bottomBandTop;
+        const isRightward = dx > 0;
+        const isMostlyHorizontal =
+          Math.abs(dy) <= Math.max(Math.abs(dx) * 0.5, bounds.height * 0.08);
+
+        if (isBottom && isRightward && isMostlyHorizontal) {
+          runStartX = runStartX ?? before.x;
+          runEndX = after.x;
+          runDx += dx;
+
+          if (
+            runDx >= minSweepDx &&
+            runStartX <= bounds.left + bounds.width * 0.38 &&
+            runEndX >= bounds.left + bounds.width * 0.72
+          ) {
+            return true;
+          }
+        } else {
+          runDx = 0;
+          runStartX = null;
+          runEndX = null;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  const SANZUI_CHARS = new Set(
+    Array.from(
+      "汁汀氾池汐汎汚汝江汲決汽沃沖沈沙没沢河沼沸油治沿況泉泊泣注波泳泥沫法泌泡洋洗洞津洪洲活派流浄浅浜浦浴浮海消涙液涼淑淡深混清済渉渋渓湖湘湯湾湿満源準滞漁演漠漢漬漸潔潜潟潤澄濁濃濯瀬瀕灌",
+    ),
+  );
+
+  function hasSanzuiChar(text) {
+    return Array.from(text).some((char) => SANZUI_CHARS.has(char));
+  }
+
+  function hasCompletedSanzui() {
+    const bounds = getInkBounds();
+
+    if (!bounds || bounds.width < 1 || bounds.height < 1) {
+      return false;
+    }
+
+    const leftLimit = bounds.left + bounds.width * 0.42;
+    const marks = state.strokes
+      .filter((stroke) => stroke.length > 1)
+      .map((stroke) => {
+        const start = stroke[0];
+        const end = stroke[stroke.length - 1];
+        const xs = stroke.map((point) => point.x);
+        const ys = stroke.map((point) => point.y);
+        const left = Math.min(...xs);
+        const right = Math.max(...xs);
+        const top = Math.min(...ys);
+        const bottom = Math.max(...ys);
+        const centerX = (left + right) / 2;
+        const centerY = (top + bottom) / 2;
+        const dx = end.x - start.x;
+        const dy = end.y - start.y;
+        const length = getStrokeLength(stroke);
+
+        return {
+          centerX,
+          centerY,
+          dx,
+          dy,
+          length,
+          isLeft: centerX <= leftLimit,
+        };
+      })
+      .filter((mark) => mark.isLeft && mark.length >= 8);
+
+    const topMark = marks.some(
+      (mark) => mark.centerY <= bounds.top + bounds.height * 0.4 && mark.dy > 2,
+    );
+    const middleMark = marks.some(
+      (mark) =>
+        mark.centerY > bounds.top + bounds.height * 0.25 &&
+        mark.centerY < bounds.top + bounds.height * 0.72 &&
+        mark.dy > 2,
+    );
+    const lowerSweep = marks.some(
+      (mark) =>
+        mark.centerY >= bounds.top + bounds.height * 0.58 &&
+        mark.dx > 6 &&
+        Math.abs(mark.dx) >= Math.abs(mark.dy) * 0.6,
+    );
+
+    return topMark && middleMark && lowerSweep;
+  }
+
+  const KUSAKANMURI_CHARS = new Set(
+    Array.from(
+      "花芳芸芽苗若苦英茂茎草荒荘荷菊菌菓菜華菩萎著葬蒸蓄蔵薄薦薫薬藩藤藍蘇蘭漢范",
+    ),
+  );
+
+  function hasKusakanmuriChar(text) {
+    return Array.from(text).some((char) => KUSAKANMURI_CHARS.has(char));
+  }
+
+  function hasCompletedKusakanmuriTop() {
+    const bounds = getInkBounds();
+
+    if (!bounds || bounds.width < 1 || bounds.height < 1) {
+      return false;
+    }
+
+    const topLimit = bounds.top + bounds.height * 0.34;
+    const topStrokes = state.strokes.filter((stroke) => {
+      if (stroke.length < 2) {
+        return false;
+      }
+
+      const xs = stroke.map((point) => point.x);
+      const ys = stroke.map((point) => point.y);
+      const centerY = (Math.min(...ys) + Math.max(...ys)) / 2;
+      return centerY <= topLimit;
+    });
+    const horizontal = topStrokes.some((stroke) => {
+      const start = stroke[0];
+      const end = stroke[stroke.length - 1];
+      return Math.abs(end.x - start.x) > bounds.width * 0.16;
+    });
+    const verticalishMarks = topStrokes.filter((stroke) => {
+      const start = stroke[0];
+      const end = stroke[stroke.length - 1];
+      return Math.abs(end.y - start.y) > 10;
+    }).length;
+
+    return horizontal && verticalishMarks >= 2;
+  }
+
+  function getAllowedRawShortfall(expectedCount, text) {
+    if (isKanaOnly(text)) {
+      return expectedCount;
+    }
+
+    if (hasShinnyouChar(text)) {
+      return 1;
+    }
+
+    if (expectedCount >= 12) {
+      return 0;
+    }
+
+    return expectedCount >= 6 ? 1 : 0;
+  }
+
+  function isStrokeCompatible(text, strokeStats) {
     const expectedCount = getCandidateStrokeCount(text);
 
     if (!expectedCount) {
       return true;
     }
 
+    if (hasShinnyouChar(text) && !hasCompletedShinnyouSweep()) {
+      return false;
+    }
+
+    if (hasSanzuiChar(text) && !hasCompletedSanzui()) {
+      return false;
+    }
+
+    if (hasKusakanmuriChar(text) && !hasCompletedKusakanmuriTop()) {
+      return false;
+    }
+
     const tolerance = getStrokeTolerance(expectedCount, text);
-    return estimatedCount + tolerance >= expectedCount;
+    const allowedRawShortfall = getAllowedRawShortfall(expectedCount, text);
+
+    return (
+      strokeStats.virtualCount + tolerance >= expectedCount &&
+      strokeStats.rawCount >= expectedCount - allowedRawShortfall
+    );
   }
 
-  function selectDisplayCandidate(candidates) {
+  function selectDisplayCandidate(candidates, strokeStats = estimateInputStrokeStats()) {
     const normalized = normalizeCandidates(candidates);
 
     if (normalized.length === 0) {
       return "";
     }
 
-    const japaneseCandidates = normalized.filter((text) =>
-      /[\u3040-\u30ff\u3400-\u9fff]/u.test(text),
-    );
-    const orderedCandidates =
-      japaneseCandidates.length > 0 ? japaneseCandidates : normalized;
-    const estimatedCount = estimateInputStrokeCount();
+    const japaneseCandidates = normalized.filter(isJapaneseCandidate);
+
+    if (japaneseCandidates.length === 0) {
+      return "";
+    }
+
+    const orderedCandidates = japaneseCandidates;
 
     return (
-      orderedCandidates.find((text) => isStrokeCompatible(text, estimatedCount)) ||
+      orderedCandidates.find((text) => isStrokeCompatible(text, strokeStats)) ||
       ""
     );
   }
 
-  function startStroke(event) {
-    canvas.dataset.lastPointerType = event.pointerType || "";
+  function isPointerInputActive() {
+    return (
+      state.pendingPointerId !== null ||
+      state.activePointerId !== null ||
+      Boolean(state.activeStrokePoints)
+    );
+  }
+
+  function resetCandidateStability() {
+    state.candidateStability.text = "";
+    state.candidateStability.signature = "";
+    state.candidateStability.firstSeenAt = 0;
+    state.candidateStability.confirmations = 0;
+    state.nextRecognitionDelay = RECOGNITION_RETRY_DELAY_MS;
+  }
+
+  function getInkSignature(strokeStats = estimateInputStrokeStats()) {
+    const bounds = getInkBounds();
+
+    if (!bounds) {
+      return "empty";
+    }
+
+    return [
+      strokeStats.rawCount,
+      strokeStats.virtualCount,
+      Math.round(getTotalInkLength() / 8),
+      Math.round(bounds.left / 8),
+      Math.round(bounds.top / 8),
+      Math.round(bounds.width / 8),
+      Math.round(bounds.height / 8),
+    ].join(":");
+  }
+
+  function requiresCandidateStability(text, strokeStats) {
+    const expectedCount = getCandidateStrokeCount(text);
+
+    return (
+      hasShinnyouChar(text) ||
+      hasSanzuiChar(text) ||
+      hasKusakanmuriChar(text) ||
+      hasUnknownKanjiStrokeCount(text) ||
+      (Number.isFinite(expectedCount) &&
+        expectedCount >= COMPLEX_STROKE_STABILITY_THRESHOLD) ||
+      strokeStats.rawCount >= COMPLEX_STROKE_STABILITY_THRESHOLD
+    );
+  }
+
+  function getStableCandidateDecision(text, strokeStats) {
+    if (!text) {
+      resetCandidateStability();
+      return { text: "", pending: false };
+    }
+
+    if (!requiresCandidateStability(text, strokeStats)) {
+      resetCandidateStability();
+      return { text, pending: false };
+    }
+
+    const signature = getInkSignature(strokeStats);
+    const now = performance.now();
+    const stability = state.candidateStability;
+
+    if (stability.text !== text || stability.signature !== signature) {
+      stability.text = text;
+      stability.signature = signature;
+      stability.firstSeenAt = now;
+      stability.confirmations = 1;
+    } else {
+      stability.confirmations += 1;
+    }
+
+    if (
+      !isPointerInputActive() &&
+      stability.confirmations >= STABILITY_MIN_CONFIRMATIONS &&
+      now - stability.firstSeenAt >= STABILITY_CONFIRM_DELAY_MS * 0.5
+    ) {
+      return { text, pending: false };
+    }
+
+    return {
+      text: "",
+      pending: true,
+      delay: STABILITY_CONFIRM_DELAY_MS,
+    };
+  }
+
+  function getDragStartDistance(pointerType) {
+    return pointerType === "touch"
+      ? DRAG_START_DISTANCE_TOUCH
+      : DRAG_START_DISTANCE_MOUSE;
+  }
+
+  function prepareStroke(event) {
     window.clearTimeout(state.recognitionTimer);
-    state.recognitionSerial += 1;
-    state.strokeStartTime = performance.now();
-    state.activePointerId = event.pointerId;
-    state.activeStrokePoints = [];
-    state.lastPoint = null;
-    state.strokes.push(state.activeStrokePoints);
+    resetCandidateStability();
+    state.pendingPointerId = event.pointerId;
+    state.pendingStartPoint = getCanvasCoordinates(event);
+    state.pendingStartTime = performance.now();
+    state.pendingPointerType = event.pointerType || "";
 
     if (typeof canvas.setPointerCapture === "function") {
       canvas.setPointerCapture(event.pointerId);
     }
+  }
 
+  function startStroke(event) {
+    if (!state.pendingStartPoint) {
+      return;
+    }
+
+    canvas.dataset.lastPointerType = state.pendingPointerType;
+    state.recognitionSerial += 1;
+    state.strokeStartTime = state.pendingStartTime;
+    state.activePointerId = event.pointerId;
+    state.activeStrokePoints = [];
+    state.lastPoint = null;
+    state.strokes.push(state.activeStrokePoints);
+    resetCandidateStability();
+    updateActionButtons();
+
+    addPreparedPoint(state.pendingStartPoint);
     addPoint(event);
+    state.pendingPointerId = null;
+    state.pendingStartPoint = null;
+    state.pendingPointerType = "";
     setBusy(true);
     scheduleRecognition(RECOGNITION_DRAW_DELAY_MS);
+  }
+
+  function addPreparedPoint(point) {
+    if (!state.activeStrokePoints) {
+      return;
+    }
+
+    const preparedPoint = {
+      ...point,
+      t: 0,
+    };
+
+    state.activeStrokePoints.push(preparedPoint);
+    drawPoint(preparedPoint, state.lastPoint);
+    state.lastPoint = preparedPoint;
   }
 
   function addPoint(event) {
@@ -537,6 +1017,22 @@
   }
 
   function continueStroke(event) {
+    if (
+      event.pointerId === state.pendingPointerId &&
+      state.pendingStartPoint &&
+      !state.activeStrokePoints
+    ) {
+      event.preventDefault();
+      const currentPoint = getCanvasCoordinates(event);
+      const distance = getDistance(state.pendingStartPoint, currentPoint);
+
+      if (distance >= getDragStartDistance(state.pendingPointerType)) {
+        startStroke(event);
+      }
+
+      return;
+    }
+
     if (event.pointerId !== state.activePointerId || !state.activeStrokePoints) {
       return;
     }
@@ -553,6 +1049,26 @@
   }
 
   function finishStroke(event) {
+    if (
+      event.pointerId === state.pendingPointerId &&
+      state.pendingStartPoint &&
+      !state.activeStrokePoints
+    ) {
+      event.preventDefault();
+
+      if (
+        typeof canvas.hasPointerCapture === "function" &&
+        canvas.hasPointerCapture(event.pointerId)
+      ) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+
+      state.pendingPointerId = null;
+      state.pendingStartPoint = null;
+      state.pendingPointerType = "";
+      return;
+    }
+
     if (event.pointerId !== state.activePointerId || !state.activeStrokePoints) {
       return;
     }
@@ -573,7 +1089,12 @@
   }
 
   function scheduleRecognition(delay) {
-    if (!hasInk()) {
+    if (!hasMeaningfulInk()) {
+      if (hasInk()) {
+        setResult(messages.noCandidate, "message");
+      }
+
+      setBusy(false);
       return;
     }
 
@@ -583,7 +1104,12 @@
   }
 
   async function runRecognition() {
-    if (!hasInk()) {
+    if (!hasMeaningfulInk()) {
+      if (hasInk()) {
+        setResult(messages.noCandidate, "message");
+      }
+
+      setBusy(false);
       return;
     }
 
@@ -596,19 +1122,29 @@
     const serial = ++state.recognitionSerial;
 
     try {
+      state.nextRecognitionDelay = RECOGNITION_RETRY_DELAY_MS;
+      const strokeStats = estimateInputStrokeStats();
       const nativeCandidates = await recognizeWithNative();
-      let text = selectDisplayCandidate(nativeCandidates);
+      let text = selectDisplayCandidate(nativeCandidates, strokeStats);
 
       if (!text) {
-        text = selectDisplayCandidate(await recognizeWithGoogle());
+        text = selectDisplayCandidate(await recognizeWithGoogle(), strokeStats);
       }
 
-      if (serial !== state.recognitionSerial || !hasInk()) {
+      if (serial !== state.recognitionSerial || !hasMeaningfulInk()) {
         return;
       }
 
-      if (text) {
-        setResult(text, "result");
+      const decision = getStableCandidateDecision(text, strokeStats);
+
+      if (decision.pending) {
+        state.needsRecognition = true;
+        state.nextRecognitionDelay = decision.delay;
+        return;
+      }
+
+      if (decision.text) {
+        setResult(decision.text, "result");
       } else {
         setResult(
           state.googleFailed ? messages.networkUnavailable : messages.noCandidate,
@@ -623,28 +1159,69 @@
       }
 
       if (state.needsRecognition) {
+        const delay = state.nextRecognitionDelay || RECOGNITION_RETRY_DELAY_MS;
         state.needsRecognition = false;
-        scheduleRecognition(RECOGNITION_RETRY_DELAY_MS);
+        state.nextRecognitionDelay = RECOGNITION_RETRY_DELAY_MS;
+        scheduleRecognition(delay);
       } else {
         setBusy(false);
       }
     }
   }
 
-  function clearPad() {
-    window.clearTimeout(state.recognitionTimer);
-    state.recognitionSerial += 1;
-    state.activePointerId = null;
-    state.activeStrokePoints = null;
-    state.lastPoint = null;
-    state.strokes = [];
+  function updateActionButtons() {
+    undoButton.disabled = state.strokes.length === 0;
+  }
 
+  function resetNativeDrawing() {
     if (state.nativeDrawing) {
       state.nativeDrawing.clear();
       state.nativeDrawing = null;
     }
+  }
+
+  function resetPointerState() {
+    state.activePointerId = null;
+    state.pendingPointerId = null;
+    state.pendingStartPoint = null;
+    state.pendingPointerType = "";
+    state.activeStrokePoints = null;
+    state.lastPoint = null;
+  }
+
+  function undoLastStroke() {
+    if (state.strokes.length === 0) {
+      return;
+    }
+
+    window.clearTimeout(state.recognitionTimer);
+    state.recognitionSerial += 1;
+    resetPointerState();
+    resetNativeDrawing();
+    resetCandidateStability();
+    state.strokes.pop();
+    drawAllStrokes();
+    updateActionButtons();
+
+    if (hasMeaningfulInk()) {
+      setBusy(true);
+      scheduleRecognition(RECOGNITION_FINISH_DELAY_MS);
+    } else {
+      setBusy(false);
+      setResult(hasInk() ? messages.noCandidate : messages.empty, "message");
+    }
+  }
+
+  function clearPad() {
+    window.clearTimeout(state.recognitionTimer);
+    state.recognitionSerial += 1;
+    resetPointerState();
+    resetNativeDrawing();
+    resetCandidateStability();
+    state.strokes = [];
 
     clearCanvas();
+    updateActionButtons();
     setBusy(false);
     setResult(messages.empty, "message");
   }
@@ -653,18 +1230,41 @@
     setResult(messages.loading, "message");
     resizeCanvas();
     state.nativeRecognizer = await createNativeRecognizer();
+    updateActionButtons();
     setBusy(false);
     setResult(messages.empty, "message");
   }
 
+  function preventCanvasGesture(event) {
+    event.preventDefault();
+  }
+
+  function handleKeyDown(event) {
+    if (event.isComposing || event.key.toLowerCase() !== "z") {
+      return;
+    }
+
+    event.preventDefault();
+    undoLastStroke();
+  }
+
   canvas.addEventListener("pointerdown", (event) => {
     event.preventDefault();
-    startStroke(event);
+    prepareStroke(event);
   });
   canvas.addEventListener("pointermove", continueStroke);
   canvas.addEventListener("pointerup", finishStroke);
   canvas.addEventListener("pointercancel", finishStroke);
+  canvas.addEventListener("dblclick", preventCanvasGesture);
+  canvas.addEventListener("contextmenu", preventCanvasGesture);
+  canvas.addEventListener("selectstart", preventCanvasGesture);
+  canvas.addEventListener("dragstart", preventCanvasGesture);
+  ["touchstart", "touchmove", "touchend", "touchcancel"].forEach((type) => {
+    canvas.addEventListener(type, preventCanvasGesture, { passive: false });
+  });
+  undoButton.addEventListener("click", undoLastStroke);
   clearButton.addEventListener("click", clearPad);
+  window.addEventListener("keydown", handleKeyDown);
 
   window.addEventListener("pagehide", () => {
     state.nativeRecognizer?.finish?.();

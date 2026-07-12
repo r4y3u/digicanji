@@ -2,9 +2,13 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
+    />
     <title>Japanese Handwriting Pad</title>
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./stroke-counts.js" defer></script>
     <script src="./app.js" defer></script>
   </head>
   <body>
@@ -20,9 +24,20 @@
         aria-label="手書き入力パッド"
       ></canvas>
 
-      <button id="clear-button" class="clear-button" type="button">
-        クリア
-      </button>
+      <div class="actions" aria-label="操作">
+        <button
+          id="undo-button"
+          class="action-button undo-button"
+          type="button"
+          aria-keyshortcuts="Z"
+          disabled
+        >
+          戻る
+        </button>
+        <button id="clear-button" class="action-button clear-button" type="button">
+          クリア
+        </button>
+      </div>
     </main>
   </body>
 </html>
