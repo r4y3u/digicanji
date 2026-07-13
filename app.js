@@ -31,6 +31,26 @@
     "鱸": 27,
   });
 
+  // 学習用の文字枠では、旧字体・異体字候補を現在一般に用いる字体へ寄せる。
+  // フリーモードでは原候補を保持する。
+  const EDUCATIONAL_GLYPH_NORMALIZATION = Object.freeze({
+    "來": "来",
+    "學": "学",
+    "國": "国",
+    "體": "体",
+    "會": "会",
+    "變": "変",
+    "讀": "読",
+    "寫": "写",
+    "廣": "広",
+    "氣": "気",
+    "澤": "沢",
+    "邊": "辺",
+    "邉": "辺",
+    "齊": "斉",
+    "齋": "斎",
+  });
+
   const STRUCTURAL_ALTERNATIVE_RULES = Object.freeze([
     {
       source: "晴",
@@ -41,6 +61,16 @@
       source: "錆",
       target: "鯖",
       test: hasLikelyLeftFishComponent,
+    },
+    {
+      source: "鳥",
+      target: "烏",
+      test: hasLikelyCrowStructure,
+    },
+    {
+      source: "天",
+      target: "夭",
+      test: hasLikelyYouStructure,
     },
   ]);
 
@@ -585,7 +615,10 @@
     const normalized = [];
 
     for (const candidate of candidates) {
-      const text = String(candidate || "").trim();
+      const rawText = String(candidate || "").trim();
+      const text = !isFreeMode() && getCharacterLength(rawText) === 1
+        ? EDUCATIONAL_GLYPH_NORMALIZATION[rawText] || rawText
+        : rawText;
 
       if (!text || seen.has(text)) {
         continue;
@@ -862,6 +895,208 @@
     return lowerDotLikeMarks.length >= 3;
   }
 
+  function getHorizontalBands(bounds = getInkBounds()) {
+    if (!bounds) {
+      return [];
+    }
+
+    const segments = getSegmentFeatures(bounds)
+      .filter((segment) => segment.isHorizontal && segment.length >= bounds.width * 0.12)
+      .map((segment) => ({
+        y: segment.centerY,
+        left: segment.left,
+        right: segment.right,
+        length: segment.length,
+        centerX: segment.centerX,
+      }))
+      .sort((a, b) => a.y - b.y);
+
+    const bands = [];
+    const gap = Math.max(8, bounds.height * 0.065);
+
+    segments.forEach((segment) => {
+      const band = bands[bands.length - 1];
+
+      if (!band || segment.y - band.y > gap) {
+        bands.push({ ...segment, count: 1 });
+        return;
+      }
+
+      band.y = (band.y * band.count + segment.y) / (band.count + 1);
+      band.left = Math.min(band.left, segment.left);
+      band.right = Math.max(band.right, segment.right);
+      band.length = Math.max(band.length, segment.length);
+      band.centerX = (band.left + band.right) / 2;
+      band.count += 1;
+    });
+
+    return bands;
+  }
+
+  function hasLikelyCrowStructure() {
+    const bounds = getInkBounds();
+
+    if (!bounds) {
+      return false;
+    }
+
+    const strokeStats = estimateInputStrokeStats();
+    const bands = getHorizontalBands(bounds).filter((band) => {
+      return band.y <= bounds.top + bounds.height * 0.72;
+    });
+
+    // 「烏」は「鳥」より一画少なく、中央の目に当たる横画が少ない。
+    return strokeStats.rawCount <= 10 && bands.length <= 4;
+  }
+
+  function hasLikelyYouStructure() {
+    const bounds = getInkBounds();
+
+    if (!bounds) {
+      return false;
+    }
+
+    const bands = getHorizontalBands(bounds).filter((band) => {
+      return band.y <= bounds.top + bounds.height * 0.5;
+    });
+
+    if (bands.length < 2) {
+      return false;
+    }
+
+    const upper = bands[0];
+    const lower = bands[1];
+    const upperStroke = getStrokeFeatures()
+      .filter((feature) => feature.centerY <= bounds.top + bounds.height * 0.3)
+      .sort((a, b) => b.length - a.length)[0];
+    const upperSlantsDown = upperStroke
+      ? Math.abs(upperStroke.end.y - upperStroke.start.y) > Math.abs(upperStroke.end.x - upperStroke.start.x) * 0.18
+      : false;
+
+    return upper.length < lower.length * 0.72 && upperSlantsDown;
+  }
+
+  function getUpperBoxAndHorizontalRelation() {
+    const bounds = getInkBounds();
+
+    if (!bounds) {
+      return null;
+    }
+
+    const segments = getSegmentFeatures(bounds);
+    const upperLimit = bounds.top + bounds.height * 0.7;
+    const shortHorizontals = segments.filter((segment) => {
+      return (
+        segment.isHorizontal &&
+        segment.centerY <= upperLimit &&
+        segment.length >= bounds.width * 0.12 &&
+        segment.length <= bounds.width * 0.48
+      );
+    });
+    const verticals = segments.filter((segment) => {
+      return (
+        segment.isVertical &&
+        segment.centerY <= upperLimit &&
+        segment.length >= bounds.height * 0.1 &&
+        segment.length <= bounds.height * 0.4
+      );
+    });
+
+    let boxCenterY = null;
+    for (const horizontal of shortHorizontals) {
+      const leftVertical = verticals.find((vertical) => {
+        return Math.abs(vertical.centerX - horizontal.left) <= bounds.width * 0.12;
+      });
+      const rightVertical = verticals.find((vertical) => {
+        return Math.abs(vertical.centerX - horizontal.right) <= bounds.width * 0.12;
+      });
+
+      if (leftVertical || rightVertical) {
+        const related = [horizontal, leftVertical, rightVertical].filter(Boolean);
+        boxCenterY = related.reduce((sum, item) => sum + item.centerY, 0) / related.length;
+        break;
+      }
+    }
+
+    if (!Number.isFinite(boxCenterY)) {
+      return null;
+    }
+
+    const longHorizontal = segments
+      .filter((segment) => {
+        return (
+          segment.isHorizontal &&
+          segment.centerY <= upperLimit &&
+          segment.length >= bounds.width * 0.42
+        );
+      })
+      .sort((a, b) => Math.abs(a.centerY - boxCenterY) - Math.abs(b.centerY - boxCenterY))[0];
+
+    if (!longHorizontal) {
+      return null;
+    }
+
+    return longHorizontal.centerY < boxCenterY ? "horizontal-above" : "horizontal-below";
+  }
+
+  function countCredibleJoinedCorners() {
+    const bounds = getInkBounds();
+
+    if (!bounds) {
+      return 0;
+    }
+
+    const guide = getCanvasGuide();
+    const minDistance = Math.max(8, Math.hypot(guide.width, guide.height) * 0.014);
+    const minLeg = Math.max(18, Math.min(bounds.width, bounds.height) * 0.1);
+    let count = 0;
+
+    state.strokes.forEach((stroke) => {
+      const points = simplifyStroke(stroke, minDistance);
+
+      for (let index = 1; index < points.length - 1; index += 1) {
+        const a = points[index - 1];
+        const b = points[index];
+        const c = points[index + 1];
+        const lenA = getDistance(a, b);
+        const lenB = getDistance(b, c);
+
+        if (lenA < minLeg || lenB < minLeg) {
+          continue;
+        }
+
+        const dot = (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y);
+        const angle = Math.acos(Math.max(-1, Math.min(1, dot / (lenA * lenB))));
+
+        if (angle >= Math.PI * 0.32 && angle <= Math.PI * 0.72) {
+          count += 1;
+        }
+      }
+    });
+
+    return count;
+  }
+
+  function hasRequiredCandidateStructure(text) {
+    if (text === "感") {
+      return getUpperBoxAndHorizontalRelation() === "horizontal-above";
+    }
+
+    if (text === "惑") {
+      return getUpperBoxAndHorizontalRelation() === "horizontal-below";
+    }
+
+    if (text === "天" && hasLikelyYouStructure()) {
+      return false;
+    }
+
+    if (text === "鳥" && hasLikelyCrowStructure()) {
+      return false;
+    }
+
+    return true;
+  }
+
   function simplifyStroke(stroke, minDistance) {
     if (stroke.length <= 2) {
       return stroke.slice();
@@ -1119,26 +1354,33 @@
   }
 
   function getAllowedRawShortfall(expectedCount, text) {
-    if (isKanaOnly(text)) {
-      return expectedCount;
+    if (isKanaOnly(text) || isFreeMode()) {
+      return isKanaOnly(text) ? expectedCount : Math.min(2, Math.floor(expectedCount * 0.18));
     }
 
-    if (hasShinnyouChar(text)) {
+    // 文字枠モードは学習用途なので、単なる曲線や崩れを「つなげ書き」と数えない。
+    // 明確な折れが存在する場合に限り、一画までの結合を認める。
+    const joinedCorners = countCredibleJoinedCorners();
+    return joinedCorners >= 1 && expectedCount >= 5 ? 1 : 0;
+  }
+
+  function getAllowedRawOverage(text) {
+    if (isFreeMode() || isKanaOnly(text)) {
       return 1;
     }
 
-    if (expectedCount >= 12) {
-      return 0;
-    }
-
-    return expectedCount >= 6 ? 1 : 0;
+    return 0;
   }
 
   function isStrokeCompatible(text, strokeStats) {
     const expectedCount = getCandidateStrokeCount(text);
 
     if (!expectedCount) {
-      return true;
+      return isFreeMode();
+    }
+
+    if (!hasRequiredCandidateStructure(text)) {
+      return false;
     }
 
     if (hasShinnyouChar(text) && !hasCompletedShinnyouSweep()) {
@@ -1155,10 +1397,12 @@
 
     const tolerance = getStrokeTolerance(expectedCount, text);
     const allowedRawShortfall = getAllowedRawShortfall(expectedCount, text);
+    const allowedRawOverage = getAllowedRawOverage(text);
 
     return (
       strokeStats.virtualCount + tolerance >= expectedCount &&
-      strokeStats.rawCount >= expectedCount - allowedRawShortfall
+      strokeStats.rawCount >= expectedCount - allowedRawShortfall &&
+      strokeStats.rawCount <= expectedCount + allowedRawOverage
     );
   }
 
