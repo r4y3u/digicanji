@@ -437,7 +437,7 @@ button {
 
 .actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(42px, 0.58fr) auto minmax(42px, 0.58fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: clamp(6px, 1.2vw, 12px);
   align-items: stretch;
 }
@@ -470,9 +470,13 @@ button {
 }
 
 .slot-position {
-  min-width: 46px;
+  min-width: 58px;
+  padding: 0 10px;
   display: grid;
   place-items: center;
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  background: rgba(18, 34, 28, 0.28);
   color: var(--muted);
   font-size: clamp(0.72rem, 1.7vw, 0.85rem);
   font-weight: 850;
@@ -507,21 +511,18 @@ input:focus-visible,
   width: 100vw;
 }
 
-.app[data-layout="vertical-wide"] .learning-screen,
-.app[data-layout="vertical-portable"] .learning-screen {
+.app[data-layout="vertical-wide"] .learning-screen {
   grid-template-rows: minmax(0, 1fr);
   grid-template-columns: minmax(180px, 0.9fr) minmax(260px, 1.35fr) minmax(112px, 0.55fr);
   grid-template-areas: "question pad actions";
 }
 
-.app[data-layout="vertical-wide"][data-handedness="left"] .learning-screen,
-.app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+.app[data-layout="vertical-wide"][data-handedness="left"] .learning-screen {
   grid-template-columns: minmax(112px, 0.55fr) minmax(260px, 1.35fr) minmax(180px, 0.9fr);
   grid-template-areas: "actions pad question";
 }
 
-.app[data-layout="vertical-wide"] .question-answer-panel,
-.app[data-layout="vertical-portable"] .question-answer-panel {
+.app[data-layout="vertical-wide"] .question-answer-panel {
   grid-area: question;
   height: auto;
   grid-template-columns: minmax(0, 1fr);
@@ -545,69 +546,137 @@ input:focus-visible,
   border-right: 0.13em solid var(--accent);
 }
 
-.app[data-layout="vertical-wide"] .result-box,
-.app[data-layout="vertical-portable"] .result-box {
+.app[data-layout="vertical-wide"] .result-box {
   min-height: 82px;
 }
 
-.app[data-layout="vertical-wide"] .slot-grid,
-.app[data-layout="vertical-portable"] .slot-grid {
+.app[data-layout="vertical-wide"] .slot-grid {
   grid-template-columns: repeat(var(--slot-count), minmax(0, 1fr));
 }
 
-.app[data-layout="vertical-wide"] .pad-stage,
+.app[data-layout="vertical-wide"] .pad-stage {
+  grid-area: pad;
+}
+
+.app[data-layout="vertical-wide"] .actions {
+  grid-area: actions;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: repeat(2, minmax(46px, 1fr)) auto;
+  align-content: start;
+}
+
+/* ポータブル縦書き: 縦向きでは崩れないフォールバック、横向きで3分割表示。 */
+.app[data-layout="vertical-portable"] .learning-screen {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "question"
+    "pad"
+    "actions";
+}
+
+.app[data-layout="vertical-portable"] .question-answer-panel {
+  grid-area: question;
+}
+
 .app[data-layout="vertical-portable"] .pad-stage {
   grid-area: pad;
 }
 
-.app[data-layout="vertical-wide"] .actions,
 .app[data-layout="vertical-portable"] .actions {
   grid-area: actions;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: repeat(2, minmax(46px, 1fr)) minmax(40px, 0.7fr) auto minmax(40px, 0.7fr);
 }
 
-/* ポータブル: 表示を90度回転し、JS側で認識座標も逆回転する。 */
-.app[data-layout="vertical-portable"] .question-answer-panel,
-.app[data-layout="vertical-portable"] .actions {
-  position: relative;
-  overflow: hidden;
-}
+@media (orientation: landscape) {
+  .app[data-layout="vertical-portable"] .learning-screen {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(170px, 0.88fr) minmax(0, 1.42fr) minmax(104px, 0.54fr);
+    grid-template-areas: "question pad actions";
+  }
 
-.app[data-layout="vertical-portable"] .question-text,
-.app[data-layout="vertical-portable"] .result-box > *,
-.app[data-layout="vertical-portable"] .actions > *,
-.app[data-layout="vertical-portable"] .review-control,
-.app[data-layout="vertical-portable"] .advance-button {
-  transform: rotate(90deg);
-}
+  .app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+    grid-template-columns: minmax(104px, 0.54fr) minmax(0, 1.42fr) minmax(170px, 0.88fr);
+    grid-template-areas: "actions pad question";
+  }
 
-.app[data-layout="vertical-portable"][data-handedness="left"] .question-text,
-.app[data-layout="vertical-portable"][data-handedness="left"] .result-box > *,
-.app[data-layout="vertical-portable"][data-handedness="left"] .actions > *,
-.app[data-layout="vertical-portable"][data-handedness="left"] .review-control,
-.app[data-layout="vertical-portable"][data-handedness="left"] .advance-button {
-  transform: rotate(-90deg);
-}
+  .app[data-layout="vertical-portable"] .question-answer-panel {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(82px, 0.45fr);
+  }
 
-.app[data-layout="vertical-portable"] .question-text {
-  width: min(72dvh, 620px);
-  height: min(32vw, 230px);
-  justify-self: center;
-  align-self: center;
-  font-size: clamp(0.9rem, 2.6vmin, 1.35rem);
-}
+  .app[data-layout="vertical-portable"] .question-text {
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    justify-self: center;
+    align-self: center;
+    flex-direction: column;
+    font-size: clamp(0.95rem, 2.7vmin, 1.4rem);
+    line-height: 1.7;
+  }
 
-.app[data-layout="vertical-portable"] .result-box > .slot-grid {
-  width: min(30dvh, 210px);
-  height: min(25vw, 180px);
-}
+  .app[data-layout="vertical-portable"] .question-prompt {
+    margin: 0.12em 0;
+    padding: 0.14em 0.07em;
+    border-bottom: 0;
+    border-right: 0.13em solid var(--accent);
+  }
 
-.app[data-layout="vertical-portable"] .actions > * {
-  justify-self: center;
-  align-self: center;
-  width: min(22dvh, 120px);
-  min-width: 64px;
+  .app[data-layout="vertical-portable"] .result-box {
+    min-height: 82px;
+  }
+
+  .app[data-layout="vertical-portable"] .slot-grid {
+    grid-template-columns: repeat(var(--slot-count), minmax(0, 1fr));
+  }
+
+  .app[data-layout="vertical-portable"] .actions {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: repeat(2, minmax(42px, 1fr)) auto;
+    align-content: start;
+  }
+
+  /* ポータブル: 横向き時だけ表示内容を90度回転し、JS側で認識座標も合わせる。 */
+  .app[data-layout="vertical-portable"] .question-answer-panel,
+  .app[data-layout="vertical-portable"] .actions {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .app[data-layout="vertical-portable"] .question-text,
+  .app[data-layout="vertical-portable"] .result-box > *,
+  .app[data-layout="vertical-portable"] .actions > *,
+  .app[data-layout="vertical-portable"] .review-control,
+  .app[data-layout="vertical-portable"] .advance-button {
+    transform: rotate(90deg);
+    transform-origin: center center;
+  }
+
+  .app[data-layout="vertical-portable"][data-handedness="left"] .question-text,
+  .app[data-layout="vertical-portable"][data-handedness="left"] .result-box > *,
+  .app[data-layout="vertical-portable"][data-handedness="left"] .actions > *,
+  .app[data-layout="vertical-portable"][data-handedness="left"] .review-control,
+  .app[data-layout="vertical-portable"][data-handedness="left"] .advance-button {
+    transform: rotate(-90deg);
+  }
+
+  .app[data-layout="vertical-portable"] .question-text {
+    width: min(68dvh, 540px);
+    max-width: calc(100% - 16px);
+    height: auto;
+  }
+
+  .app[data-layout="vertical-portable"] .result-box > .slot-grid {
+    width: min(28dvh, 210px);
+    height: min(22vw, 170px);
+  }
+
+  .app[data-layout="vertical-portable"] .actions > * {
+    justify-self: center;
+    align-self: center;
+    width: min(20dvh, 116px);
+    min-width: 66px;
+  }
 }
 
 /* 結果 */
@@ -1000,7 +1069,7 @@ input:focus-visible,
   }
 
   .actions {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px auto 42px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
     gap: 5px;
   }
 
@@ -1041,14 +1110,20 @@ input:focus-visible,
     padding: 5px 9px;
   }
 
-  .app[data-layout="vertical-wide"] .learning-screen,
-  .app[data-layout="vertical-portable"] .learning-screen {
+  .app[data-layout="vertical-wide"] .learning-screen {
     grid-template-columns: minmax(150px, 0.85fr) minmax(230px, 1.45fr) minmax(96px, 0.5fr);
   }
 
-  .app[data-layout="vertical-wide"][data-handedness="left"] .learning-screen,
-  .app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+  .app[data-layout="vertical-wide"][data-handedness="left"] .learning-screen {
     grid-template-columns: minmax(96px, 0.5fr) minmax(230px, 1.45fr) minmax(150px, 0.85fr);
+  }
+
+  .app[data-layout="vertical-portable"] .learning-screen {
+    grid-template-columns: minmax(150px, 0.85fr) minmax(210px, 1.45fr) minmax(88px, 0.48fr);
+  }
+
+  .app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+    grid-template-columns: minmax(88px, 0.48fr) minmax(210px, 1.45fr) minmax(150px, 0.85fr);
   }
 }
 
@@ -1063,7 +1138,3 @@ input:focus-visible,
   }
 }
 
-/* 回転後のボタン全体がパッド内に収まる余白。 */
-.app[data-layout="vertical-portable"] .advance-button {
-  bottom: clamp(30px, 6dvh, 46px);
-}

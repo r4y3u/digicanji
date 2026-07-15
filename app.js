@@ -12,8 +12,6 @@
   const slotPosition = document.querySelector("#slot-position");
   const clearButton = document.querySelector("#clear-button");
   const undoButton = document.querySelector("#undo-button");
-  const prevSlotButton = document.querySelector("#prev-slot-button");
-  const nextSlotButton = document.querySelector("#next-slot-button");
   const advanceButton = document.querySelector("#advance-button");
   const reviewButton = document.querySelector("#review-button");
   const reviewMenu = document.querySelector("#review-menu");
@@ -319,15 +317,26 @@
     return state.settings.layout === "vertical-portable";
   }
 
+  function isLandscapeViewport() {
+    if (typeof window.matchMedia === "function") {
+      return window.matchMedia("(orientation: landscape)").matches;
+    }
+    return window.innerWidth > window.innerHeight;
+  }
+
+  function isPortableRotationActive() {
+    return isPortableLayout() && isLandscapeViewport();
+  }
+
   function getPortableRotation() {
-    if (!isPortableLayout()) {
+    if (!isPortableRotationActive()) {
       return "none";
     }
     return state.settings.handedness === "left" ? "counterclockwise" : "clockwise";
   }
 
   function getLogicalCanvasSize(rect = canvas.getBoundingClientRect()) {
-    if (isPortableLayout()) {
+    if (isPortableRotationActive()) {
       return {
         width: Math.max(1, rect.height),
         height: Math.max(1, rect.width),
@@ -1989,9 +1998,9 @@
   function updateActionButtons() {
     const count = getVisibleSlotCount();
     undoButton.disabled = state.strokes.length === 0;
-    prevSlotButton.disabled = state.activeSlotIndex <= 0;
-    nextSlotButton.disabled = state.activeSlotIndex >= count - 1;
     slotPosition.textContent = `${state.activeSlotIndex + 1} / ${count}`;
+    slotPosition.dataset.atStart = state.activeSlotIndex <= 0 ? "true" : "false";
+    slotPosition.dataset.atEnd = state.activeSlotIndex >= count - 1 ? "true" : "false";
   }
 
   function parseCsv(text) {
@@ -2500,6 +2509,21 @@
     event.preventDefault();
   }
 
+  function isEditableTarget(target) {
+    if (!(target instanceof Element)) {
+      return false;
+    }
+    return Boolean(target.closest('input, textarea, select, [contenteditable="true"]'));
+  }
+
+  function handleKeyboardReviewToggle() {
+    setReviewMenuOpen(reviewMenu.hidden);
+    if (!reviewMenu.hidden) {
+      const currentItem = reviewMenu.querySelector(`.review-item[data-index="${state.currentQuestionIndex}"]`);
+      currentItem?.focus?.({ preventScroll: true });
+    }
+  }
+
   function handleKeyDown(event) {
     if (event.key === "Escape") {
       if (!explanationOverlay.hidden) {
@@ -2512,17 +2536,48 @@
       return;
     }
 
-    if (
-      event.isComposing ||
-      event.key.toLowerCase() !== "z" ||
-      learningScreen.hidden ||
-      !settingsOverlay.hidden
-    ) {
+    if (event.isComposing || isEditableTarget(event.target)) {
       return;
     }
 
-    event.preventDefault();
-    undoLastStroke();
+    if (learningScreen.hidden || !explanationOverlay.hidden || !settingsOverlay.hidden) {
+      if (event.key.toLowerCase() === "z" && !learningScreen.hidden && !settingsOverlay.hidden) {
+        event.preventDefault();
+        undoLastStroke();
+      }
+      return;
+    }
+
+    const lowerKey = event.key.toLowerCase();
+    if (lowerKey === "z") {
+      event.preventDefault();
+      undoLastStroke();
+      return;
+    }
+
+    if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      moveSlot(-1);
+      return;
+    }
+
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      moveSlot(1);
+      return;
+    }
+
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      handleKeyboardReviewToggle();
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setReviewMenuOpen(false);
+      handleAdvance();
+    }
   }
 
   canvas.addEventListener("pointerdown", (event) => {
@@ -2542,8 +2597,6 @@
 
   undoButton.addEventListener("click", undoLastStroke);
   clearButton.addEventListener("click", clearPad);
-  prevSlotButton.addEventListener("click", () => moveSlot(-1));
-  nextSlotButton.addEventListener("click", () => moveSlot(1));
   advanceButton.addEventListener("click", handleAdvance);
   resultBox.addEventListener("click", (event) => {
     const slot = event.target.closest(".character-slot");
