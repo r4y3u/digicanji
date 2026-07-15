@@ -1,14 +1,38 @@
 (() => {
   "use strict";
 
+  const app = document.querySelector("#app");
+  const learningScreen = document.querySelector("#learning-screen");
+  const resultScreen = document.querySelector("#result-screen");
   const canvas = document.querySelector("#handwriting-pad");
   const resultBox = document.querySelector("#recognized-text");
+  const questionText = document.querySelector("#question-text");
+  const progressText = document.querySelector("#progress-text");
+  const progressBar = document.querySelector("#progress-bar");
+  const slotPosition = document.querySelector("#slot-position");
   const clearButton = document.querySelector("#clear-button");
   const undoButton = document.querySelector("#undo-button");
-  const slotModeSelect = document.querySelector("#slot-mode");
   const prevSlotButton = document.querySelector("#prev-slot-button");
   const nextSlotButton = document.querySelector("#next-slot-button");
-  const actions = document.querySelector(".actions");
+  const advanceButton = document.querySelector("#advance-button");
+  const reviewButton = document.querySelector("#review-button");
+  const reviewMenu = document.querySelector("#review-menu");
+  const settingsButton = document.querySelector("#settings-button");
+  const settingsOverlay = document.querySelector("#settings-overlay");
+  const settingsCloseButton = document.querySelector("#settings-close-button");
+  const layoutSelect = document.querySelector("#layout-select");
+  const csvFileInput = document.querySelector("#csv-file-input");
+  const csvTextarea = document.querySelector("#csv-textarea");
+  const importCsvButton = document.querySelector("#import-csv-button");
+  const sampleDataButton = document.querySelector("#sample-data-button");
+  const clearStatsButton = document.querySelector("#clear-stats-button");
+  const dataStatus = document.querySelector("#data-status");
+  const resultList = document.querySelector("#result-list");
+  const scoreSummary = document.querySelector("#score-summary");
+  const retryButton = document.querySelector("#retry-button");
+  const explanationOverlay = document.querySelector("#explanation-overlay");
+  const explanationTitle = document.querySelector("#explanation-title");
+  const explanationText = document.querySelector("#explanation-text");
   const context = canvas.getContext("2d");
   const strokeCounts = window.JP_STROKE_COUNTS || {};
 
@@ -27,12 +51,21 @@
   const STABILITY_CONFIRM_DELAY_MS = 260;
   const STABILITY_MIN_CONFIRMATIONS = 2;
   const COMPLEX_STROKE_STABILITY_THRESHOLD = 12;
+  const MAX_SESSION_QUESTIONS = 10;
+  const RESULT_REVEAL_INTERVAL_MS = 280;
+  const STORAGE_KEYS = Object.freeze({
+    settings: "digicanji.settings.v1",
+    stats: "digicanji.stats.v1",
+    customCsv: "digicanji.customCsv.v1",
+  });
+  const SAMPLE_CSV = `前部,問部,後部,解答,解説
+改善を,ハカル,。,図る。,しようと考えること
+,アツイ,本を読む。,厚い,物を横から見たときの幅がある
+選手の,コウタイ,を知らせる。,交代,人の役割などを入れ替えること`;
   const SUPPLEMENTAL_STROKE_COUNTS = Object.freeze({
     "鱸": 27,
   });
 
-  // 学習用の文字枠では、旧字体・異体字候補を現在一般に用いる字体へ寄せる。
-  // フリーモードでは原候補を保持する。
   const EDUCATIONAL_GLYPH_NORMALIZATION = Object.freeze({
     "來": "来",
     "學": "学",
@@ -87,12 +120,44 @@
       state: "message",
     };
   }
+
   const SHINNYOU_CHARS = new Set(
     Array.from(
       "込辻迂迄迅迎近返迫迭述迷追退送逃逆途透逐逓通逝速造逢連逮週進逸遅遇遊運遍過道達違遠遣適遭遮遷選遺避還邁辺邊迦迩逗這逞逡逵逶逹遁遂遜遼遽邂邃邇邉",
     ),
   );
 
+  function safeJsonParse(value, fallback) {
+    try {
+      return JSON.parse(value) ?? fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  function safeStorageGet(key) {
+    try {
+      return localStorage.getItem(key);
+    } catch {
+      return null;
+    }
+  }
+
+  function loadSettings() {
+    const stored = safeJsonParse(safeStorageGet(STORAGE_KEYS.settings), {});
+    const layout = ["horizontal", "vertical-wide", "vertical-portable"].includes(stored.layout)
+      ? stored.layout
+      : "horizontal";
+    const handedness = stored.handedness === "left" ? "left" : "right";
+    return { layout, handedness };
+  }
+
+  function loadStats() {
+    const stored = safeJsonParse(safeStorageGet(STORAGE_KEYS.stats), {});
+    return stored && typeof stored === "object" ? stored : {};
+  }
+
+  const initialSettings = loadSettings();
   const state = {
     nativeRecognizer: null,
     nativeDrawing: null,
@@ -106,7 +171,7 @@
     strokeStartTime: 0,
     slotMode: 1,
     activeSlotIndex: 0,
-    slots: Array.from({ length: 4 }, createInputRecord),
+    slots: [createInputRecord()],
     freeInput: createInputRecord(),
     strokes: [],
     recognitionTimer: 0,
@@ -127,6 +192,14 @@
       width: 0,
       height: 0,
     },
+    questions: [],
+    session: [],
+    currentQuestionIndex: 0,
+    stats: loadStats(),
+    settings: initialSettings,
+    sourceCsv: "",
+    resultsCommitted: false,
+    resultTimers: [],
   };
 
   const messages = {
@@ -139,20 +212,23 @@
   state.strokes = state.slots[0].strokes;
 
   function isFreeMode() {
-    return state.slotMode === "free";
+    return false;
   }
 
   function getVisibleSlotCount() {
-    return isFreeMode() ? 0 : Math.max(1, Math.min(4, Number(state.slotMode) || 1));
+    return Math.max(1, state.slots.length);
   }
 
   function getActiveInputRecord() {
-    return isFreeMode() ? state.freeInput : state.slots[state.activeSlotIndex];
+    return state.slots[state.activeSlotIndex] || state.slots[0];
   }
 
   function forEachInputRecord(callback) {
+    if (state.session.length > 0) {
+      state.session.forEach((item) => item.slots.forEach(callback));
+      return;
+    }
     state.slots.forEach(callback);
-    callback(state.freeInput);
   }
 
   function refreshActiveStrokesReference() {
@@ -160,35 +236,15 @@
   }
 
   function getLiveResultText() {
-    if (isFreeMode()) {
-      const record = state.freeInput;
-      return record.text || record.message || messages.empty;
-    }
-
-    const count = getVisibleSlotCount();
-    const chars = state.slots
-      .slice(0, count)
-      .map((record) => record.text || "□")
-      .join("");
-
+    const chars = state.slots.map((record) => record.text || "□").join("");
     return chars || messages.empty;
   }
 
   function renderResultArea() {
     resultBox.replaceChildren();
-    resultBox.dataset.mode = isFreeMode() ? "free" : "slots";
-
-    if (isFreeMode()) {
-      const record = state.freeInput;
-      resultBox.dataset.state = record.text ? "" : "message";
-      resultBox.textContent = record.text || record.message || messages.empty;
-      resultBox.setAttribute("aria-label", getLiveResultText());
-      updateBusyIndicator();
-      return;
-    }
-
-    const count = getVisibleSlotCount();
+    resultBox.dataset.mode = "slots";
     resultBox.dataset.state = "slots";
+    const count = getVisibleSlotCount();
     const grid = document.createElement("span");
     grid.className = "slot-grid";
     grid.style.setProperty("--slot-count", String(count));
@@ -224,19 +280,19 @@
     const record = getActiveInputRecord();
 
     if (stateName === "result") {
-      record.text = text;
+      record.text = Array.from(String(text || ""))[0] || "";
       record.message = "";
       record.state = "result";
     } else {
       record.message = text;
       record.state = "message";
-
       if (text !== messages.empty && text !== messages.loading) {
         record.text = "";
       }
     }
 
     renderResultArea();
+    updateReviewMenu();
   }
 
   function clearActiveRecognition() {
@@ -249,13 +305,6 @@
 
   function updateBusyIndicator() {
     const isBusy = Boolean(state.isBusyIndicatorVisible);
-
-    if (isFreeMode()) {
-      resultBox.dataset.busy = isBusy ? "true" : "false";
-      return;
-    }
-
-    resultBox.dataset.busy = "false";
     resultBox.querySelectorAll(".character-slot").forEach((slot) => {
       const index = Number(slot.dataset.index);
       slot.dataset.busy = isBusy && index === state.activeSlotIndex ? "true" : "false";
@@ -266,26 +315,62 @@
     state.isBusyIndicatorVisible = Boolean(isBusy);
     updateBusyIndicator();
   }
+  function isPortableLayout() {
+    return state.settings.layout === "vertical-portable";
+  }
+
+  function getPortableRotation() {
+    if (!isPortableLayout()) {
+      return "none";
+    }
+    return state.settings.handedness === "left" ? "counterclockwise" : "clockwise";
+  }
+
+  function getLogicalCanvasSize(rect = canvas.getBoundingClientRect()) {
+    if (isPortableLayout()) {
+      return {
+        width: Math.max(1, rect.height),
+        height: Math.max(1, rect.width),
+      };
+    }
+    return {
+      width: Math.max(1, rect.width),
+      height: Math.max(1, rect.height),
+    };
+  }
+
+  function logicalToDisplayPoint(point) {
+    const rect = canvas.getBoundingClientRect();
+    const rotation = getPortableRotation();
+    if (rotation === "clockwise") {
+      return { x: rect.width - point.y, y: point.x };
+    }
+    if (rotation === "counterclockwise") {
+      return { x: point.y, y: rect.height - point.x };
+    }
+    return { x: point.x, y: point.y };
+  }
 
   function resizeCanvas() {
     const rect = canvas.getBoundingClientRect();
-    const width = Math.max(1, rect.width);
-    const height = Math.max(1, rect.height);
+    const displayWidth = Math.max(1, rect.width);
+    const displayHeight = Math.max(1, rect.height);
+    const logicalSize = getLogicalCanvasSize(rect);
     const ratio = window.devicePixelRatio || 1;
     const previousSize = state.canvasCssSize;
     const sizeChanged =
-      Math.abs(previousSize.width - width) > 0.5 ||
-      Math.abs(previousSize.height - height) > 0.5;
+      Math.abs(previousSize.width - logicalSize.width) > 0.5 ||
+      Math.abs(previousSize.height - logicalSize.height) > 0.5;
 
     if (sizeChanged && previousSize.width > 0 && previousSize.height > 0) {
-      scaleStoredInk(previousSize, { width, height });
+      scaleStoredInk(previousSize, logicalSize);
       resetNativeDrawing();
       resetCandidateStability();
     }
 
-    state.canvasCssSize = { width, height };
-    canvas.width = Math.max(1, Math.round(width * ratio));
-    canvas.height = Math.max(1, Math.round(height * ratio));
+    state.canvasCssSize = logicalSize;
+    canvas.width = Math.max(1, Math.round(displayWidth * ratio));
+    canvas.height = Math.max(1, Math.round(displayHeight * ratio));
 
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
     drawAllStrokes();
@@ -344,19 +429,21 @@
     context.strokeStyle = INK_COLOR;
     context.fillStyle = INK_COLOR;
     const lineWidth = getLineWidth();
+    const displayPoint = logicalToDisplayPoint(point);
+    const previousDisplayPoint = previousPoint ? logicalToDisplayPoint(previousPoint) : null;
 
     context.lineWidth = lineWidth;
 
-    if (!previousPoint) {
+    if (!previousDisplayPoint) {
       context.beginPath();
-      context.arc(point.x, point.y, lineWidth / 2, 0, Math.PI * 2);
+      context.arc(displayPoint.x, displayPoint.y, lineWidth / 2, 0, Math.PI * 2);
       context.fill();
       return;
     }
 
     context.beginPath();
-    context.moveTo(previousPoint.x, previousPoint.y);
-    context.lineTo(point.x, point.y);
+    context.moveTo(previousDisplayPoint.x, previousDisplayPoint.y);
+    context.lineTo(displayPoint.x, displayPoint.y);
     context.stroke();
   }
 
@@ -371,10 +458,17 @@
 
   function getCanvasCoordinates(event) {
     const rect = canvas.getBoundingClientRect();
-    const x = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
-    const y = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+    const displayX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const displayY = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+    const rotation = getPortableRotation();
 
-    return { x, y };
+    if (rotation === "clockwise") {
+      return { x: displayY, y: rect.width - displayX };
+    }
+    if (rotation === "counterclockwise") {
+      return { x: rect.height - displayY, y: displayX };
+    }
+    return { x: displayX, y: displayY };
   }
 
   function hasInk() {
@@ -400,10 +494,10 @@
   }
 
   function getCanvasGuide() {
-    const rect = canvas.getBoundingClientRect();
+    const logicalSize = getLogicalCanvasSize();
     return {
-      width: Math.max(1, Math.round(rect.width)),
-      height: Math.max(1, Math.round(rect.height)),
+      width: Math.max(1, Math.round(logicalSize.width)),
+      height: Math.max(1, Math.round(logicalSize.height)),
     };
   }
 
@@ -1799,22 +1893,6 @@
     }
   }
 
-  function updateActionButtons() {
-    const slotMode = isFreeMode() ? "free" : "slots";
-    actions.dataset.slotMode = slotMode;
-    undoButton.disabled = state.strokes.length === 0;
-
-    if (isFreeMode()) {
-      prevSlotButton.disabled = true;
-      nextSlotButton.disabled = true;
-      return;
-    }
-
-    const count = getVisibleSlotCount();
-    prevSlotButton.disabled = state.activeSlotIndex <= 0;
-    nextSlotButton.disabled = state.activeSlotIndex >= count - 1;
-  }
-
   function resetNativeDrawing() {
     if (state.nativeDrawing) {
       state.nativeDrawing.clear();
@@ -1849,17 +1927,7 @@
     }
   }
 
-  function setSlotMode(value) {
-    state.slotMode = value === "free" ? "free" : Math.max(1, Math.min(4, Number(value) || 1));
-    state.activeSlotIndex = 0;
-    activateCurrentInput();
-  }
-
   function moveSlot(delta) {
-    if (isFreeMode()) {
-      return;
-    }
-
     const count = getVisibleSlotCount();
     const nextIndex = Math.max(0, Math.min(count - 1, state.activeSlotIndex + delta));
 
@@ -1868,6 +1936,10 @@
     }
 
     state.activeSlotIndex = nextIndex;
+    const item = state.session[state.currentQuestionIndex];
+    if (item) {
+      item.activeSlotIndex = nextIndex;
+    }
     activateCurrentInput();
   }
 
@@ -1914,13 +1986,514 @@
     setResult(messages.empty, "message");
   }
 
+  function updateActionButtons() {
+    const count = getVisibleSlotCount();
+    undoButton.disabled = state.strokes.length === 0;
+    prevSlotButton.disabled = state.activeSlotIndex <= 0;
+    nextSlotButton.disabled = state.activeSlotIndex >= count - 1;
+    slotPosition.textContent = `${state.activeSlotIndex + 1} / ${count}`;
+  }
+
+  function parseCsv(text) {
+    const source = String(text || "").replace(/^\uFEFF/, "");
+    const rows = [];
+    let row = [];
+    let cell = "";
+    let quoted = false;
+
+    for (let index = 0; index < source.length; index += 1) {
+      const char = source[index];
+      const next = source[index + 1];
+
+      if (quoted) {
+        if (char === '"' && next === '"') {
+          cell += '"';
+          index += 1;
+        } else if (char === '"') {
+          quoted = false;
+        } else {
+          cell += char;
+        }
+        continue;
+      }
+
+      if (char === '"') {
+        quoted = true;
+      } else if (char === ",") {
+        row.push(cell);
+        cell = "";
+      } else if (char === "\n") {
+        row.push(cell.replace(/\r$/, ""));
+        rows.push(row);
+        row = [];
+        cell = "";
+      } else {
+        cell += char;
+      }
+    }
+
+    if (cell.length > 0 || row.length > 0) {
+      row.push(cell.replace(/\r$/, ""));
+      rows.push(row);
+    }
+
+    const nonEmptyRows = rows.filter((columns) => columns.some((value) => String(value).trim() !== ""));
+    if (nonEmptyRows.length === 0) {
+      return [];
+    }
+
+    const expectedHeader = ["前部", "問部", "後部", "解答", "解説"];
+    const first = nonEmptyRows[0].slice(0, 5).map((value) => String(value).trim());
+    const hasHeader = expectedHeader.every((name, index) => first[index] === name);
+    const dataRows = hasHeader ? nonEmptyRows.slice(1) : nonEmptyRows;
+
+    return dataRows
+      .map((columns, index) => createQuestion(columns, index))
+      .filter(Boolean);
+  }
+
+  function stripDuplicatedAnswerSuffix(answer, back) {
+    let normalized = String(answer || "").trim();
+    const suffixTarget = String(back || "").trimStart();
+    const duplicatedMarks = new Set(["。", "、", "！", "？", "!", "?"]);
+
+    while (normalized && suffixTarget) {
+      const lastChar = Array.from(normalized).at(-1);
+      const firstBackChar = Array.from(suffixTarget)[0];
+      if (lastChar !== firstBackChar || !duplicatedMarks.has(lastChar)) {
+        break;
+      }
+      normalized = Array.from(normalized).slice(0, -1).join("").trimEnd();
+    }
+
+    return normalized;
+  }
+
+  function normalizeComparableText(text) {
+    return String(text || "")
+      .normalize("NFKC")
+      .replace(/[\s\u3000]/g, "")
+      .trim();
+  }
+
+  function hashString(value) {
+    let hash = 2166136261;
+    for (const char of String(value)) {
+      hash ^= char.codePointAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(36);
+  }
+
+  function createQuestion(columns, sourceIndex) {
+    const [front = "", prompt = "", back = "", rawAnswer = "", explanation = ""] = columns;
+    const cleanPrompt = String(prompt).trim();
+    const cleanRawAnswer = String(rawAnswer).trim();
+    const answer = stripDuplicatedAnswerSuffix(cleanRawAnswer, back);
+
+    if (!cleanPrompt || !answer) {
+      return null;
+    }
+
+    const identity = [front, cleanPrompt, back, cleanRawAnswer, explanation].join("\u241f");
+    const key = `q_${hashString(identity)}`;
+    const saved = state.stats[key] || {};
+
+    return {
+      key,
+      sourceIndex,
+      front: String(front),
+      prompt: cleanPrompt,
+      back: String(back),
+      rawAnswer: cleanRawAnswer,
+      answer,
+      explanation: String(explanation).trim() || "解説は登録されていません。",
+      totalAttempts: Math.max(0, Number(saved.totalAttempts) || 0),
+      correctCount: Math.max(0, Number(saved.correctCount) || 0),
+    };
+  }
+
+  function getQuestionPriorityWeight(question) {
+    const attempts = question.totalAttempts;
+    const accuracy = attempts > 0 ? question.correctCount / attempts : 0;
+    const errorPriority = 1 + (1 - accuracy) * 5;
+    const newQuestionPriority = attempts === 0 ? 2.25 : 0;
+    const lowExposurePriority = 1.4 / Math.sqrt(attempts + 1);
+    return errorPriority + newQuestionPriority + lowExposurePriority;
+  }
+
+  function selectSessionQuestions(questions) {
+    return questions
+      .map((question) => {
+        const weight = getQuestionPriorityWeight(question);
+        const random = Math.max(Number.EPSILON, Math.random());
+        return { question, key: Math.pow(random, 1 / weight) };
+      })
+      .sort((a, b) => b.key - a.key)
+      .slice(0, Math.min(MAX_SESSION_QUESTIONS, questions.length))
+      .map((entry) => entry.question);
+  }
+
+  function createSessionItem(question) {
+    const characters = Array.from(question.answer);
+    return {
+      question,
+      slots: characters.map(createInputRecord),
+      activeSlotIndex: 0,
+      answerText: "",
+      isCorrect: false,
+    };
+  }
+
+  function getItemAnswer(item, placeholder = false) {
+    return item.slots
+      .map((record) => record.text || (placeholder ? "□" : ""))
+      .join("");
+  }
+
+  function saveCurrentSessionState() {
+    const item = state.session[state.currentQuestionIndex];
+    if (!item) {
+      return;
+    }
+    item.activeSlotIndex = state.activeSlotIndex;
+    item.answerText = getItemAnswer(item);
+  }
+
+  function renderQuestionText(question) {
+    questionText.replaceChildren();
+    const front = document.createElement("span");
+    front.className = "question-part question-front";
+    front.textContent = question.front;
+    const prompt = document.createElement("span");
+    prompt.className = "question-part question-prompt";
+    prompt.textContent = question.prompt;
+    const back = document.createElement("span");
+    back.className = "question-part question-back";
+    back.textContent = question.back;
+    questionText.append(front, prompt, back);
+    questionText.setAttribute("aria-label", `${question.front}${question.prompt}${question.back}`);
+    fitQuestionText();
+  }
+
+  function fitQuestionText() {
+    questionText.style.removeProperty("font-size");
+    window.requestAnimationFrame(() => {
+      const maxHeight = questionText.clientHeight;
+      const maxWidth = questionText.clientWidth;
+      if (!maxHeight || !maxWidth) {
+        return;
+      }
+
+      let size = Number.parseFloat(getComputedStyle(questionText).fontSize) || 22;
+      let attempts = 0;
+      while (
+        attempts < 12 &&
+        (questionText.scrollHeight > maxHeight + 1 || questionText.scrollWidth > maxWidth + 1) &&
+        size > 12
+      ) {
+        size -= 1;
+        questionText.style.fontSize = `${size}px`;
+        attempts += 1;
+      }
+    });
+  }
+
+  function renderProgress() {
+    const total = Math.max(1, state.session.length);
+    const current = Math.min(total, state.currentQuestionIndex + 1);
+    progressText.textContent = `${current} / ${total}`;
+    progressBar.style.width = `${(current / total) * 100}%`;
+    advanceButton.textContent = state.currentQuestionIndex === total - 1 ? "回答" : "進む";
+  }
+
+  function updateReviewMenu() {
+    reviewMenu.replaceChildren();
+    state.session.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "review-item";
+      if (index === state.currentQuestionIndex) {
+        button.classList.add("is-current");
+      }
+      button.dataset.index = String(index);
+
+      const number = document.createElement("span");
+      number.className = "review-number";
+      number.textContent = `${index + 1}`;
+      const preview = document.createElement("span");
+      preview.className = "review-preview";
+      preview.textContent = `${item.question.front}${item.question.prompt}${item.question.back}`;
+      const status = document.createElement("span");
+      status.className = "review-status";
+      status.textContent = item.slots.some((record) => record.text) ? "入力済" : "—";
+      button.append(number, preview, status);
+      reviewMenu.append(button);
+    });
+  }
+
+  function setReviewMenuOpen(isOpen) {
+    reviewMenu.hidden = !isOpen;
+    reviewButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
+  }
+
+  function goToProblem(index, { recognizeIfNeeded = true } = {}) {
+    if (!state.session[index]) {
+      return;
+    }
+
+    saveCurrentSessionState();
+    state.currentQuestionIndex = index;
+    const item = state.session[index];
+    state.slots = item.slots;
+    state.slotMode = item.slots.length;
+    state.activeSlotIndex = Math.max(0, Math.min(item.slots.length - 1, item.activeSlotIndex || 0));
+    refreshActiveStrokesReference();
+    renderQuestionText(item.question);
+    renderProgress();
+    updateReviewMenu();
+    activateCurrentInput({ recognizeIfNeeded });
+    setReviewMenuOpen(false);
+  }
+
+  function clearResultTimers() {
+    state.resultTimers.forEach((timer) => window.clearTimeout(timer));
+    state.resultTimers.length = 0;
+  }
+
+  function startSession() {
+    clearResultTimers();
+    if (state.questions.length === 0) {
+      dataStatus.textContent = "有効な問題がありません。CSVの5列を確認してください。";
+      return;
+    }
+
+    const selected = selectSessionQuestions(state.questions);
+    state.session = selected.map(createSessionItem);
+    state.currentQuestionIndex = 0;
+    state.resultsCommitted = false;
+    learningScreen.hidden = false;
+    resultScreen.hidden = true;
+    retryButton.hidden = true;
+    scoreSummary.className = "score-summary";
+    resultList.replaceChildren();
+    goToProblem(0, { recognizeIfNeeded: false });
+    setResult(state.nativeRecognizer === null ? messages.loading : messages.empty, "message");
+    window.requestAnimationFrame(resizeCanvas);
+  }
+
+  function handleAdvance() {
+    saveCurrentSessionState();
+    if (state.currentQuestionIndex < state.session.length - 1) {
+      goToProblem(state.currentQuestionIndex + 1);
+      return;
+    }
+    showResults();
+  }
+
+  function commitSessionStats() {
+    if (state.resultsCommitted) {
+      return;
+    }
+
+    state.session.forEach((item) => {
+      item.answerText = getItemAnswer(item);
+      item.isCorrect = normalizeComparableText(item.answerText) === normalizeComparableText(item.question.answer);
+      item.question.totalAttempts += 1;
+      if (item.isCorrect) {
+        item.question.correctCount += 1;
+      }
+      state.stats[item.question.key] = {
+        totalAttempts: item.question.totalAttempts,
+        correctCount: item.question.correctCount,
+      };
+    });
+
+    state.resultsCommitted = true;
+    try {
+      localStorage.setItem(STORAGE_KEYS.stats, JSON.stringify(state.stats));
+    } catch {
+      // Storage may be unavailable; the current session still works.
+    }
+  }
+
+  function appendSentenceParts(container, question, answerText) {
+    const front = document.createTextNode(question.front);
+    const answer = document.createElement("span");
+    answer.className = "result-answer-part";
+    answer.textContent = answerText || "未回答";
+    const back = document.createTextNode(question.back);
+    container.append(front, answer, back);
+  }
+
+  function createResultRow(item, index) {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = `result-row ${item.isCorrect ? "is-correct" : "is-incorrect"}`;
+    row.dataset.index = String(index);
+    row.setAttribute("aria-label", `${index + 1}問目。${item.isCorrect ? "正解" : "不正解"}。クリックで解説。`);
+
+    const sentence = document.createElement("span");
+    sentence.className = "result-sentence";
+    appendSentenceParts(sentence, item.question, item.answerText);
+    const judgement = document.createElement("span");
+    judgement.className = "result-judgement";
+    judgement.textContent = item.isCorrect ? "○" : "×";
+    row.append(sentence, judgement);
+    return row;
+  }
+
+  function showResults() {
+    window.clearTimeout(state.recognitionTimer);
+    state.recognitionSerial += 1;
+    setBusy(false);
+    saveCurrentSessionState();
+    commitSessionStats();
+    clearResultTimers();
+    learningScreen.hidden = true;
+    resultScreen.hidden = false;
+    resultList.replaceChildren();
+    scoreSummary.replaceChildren();
+    scoreSummary.className = "score-summary";
+    retryButton.hidden = true;
+
+    state.session.forEach((item, index) => {
+      const row = createResultRow(item, index);
+      resultList.append(row);
+      const revealTimer = window.setTimeout(() => {
+        row.classList.add("is-visible");
+        const judgeTimer = window.setTimeout(() => row.classList.add("is-judged"), 120);
+        state.resultTimers.push(judgeTimer);
+      }, 100 + index * RESULT_REVEAL_INTERVAL_MS);
+      state.resultTimers.push(revealTimer);
+    });
+
+    const summaryDelay = 180 + state.session.length * RESULT_REVEAL_INTERVAL_MS;
+    const summaryTimer = window.setTimeout(() => {
+      const correctCount = state.session.filter((item) => item.isCorrect).length;
+      const lead = document.createElement("span");
+      lead.textContent = `${state.session.length}問中`;
+      const number = document.createElement("strong");
+      number.className = "score-number";
+      if (correctCount === state.session.length) {
+        number.classList.add("is-perfect");
+      }
+      number.textContent = String(correctCount);
+      const tail = document.createElement("span");
+      tail.textContent = "問正解";
+      scoreSummary.append(lead, number, tail);
+      scoreSummary.classList.add("is-visible");
+      retryButton.hidden = false;
+      retryButton.focus({ preventScroll: true });
+    }, summaryDelay);
+    state.resultTimers.push(summaryTimer);
+  }
+
+  function openExplanation(index) {
+    const item = state.session[index];
+    if (!item) {
+      return;
+    }
+    explanationTitle.textContent = `正解：${item.question.answer}`;
+    explanationText.textContent = item.question.explanation;
+    explanationOverlay.hidden = false;
+  }
+
+  function closeExplanation() {
+    explanationOverlay.hidden = true;
+  }
+
+  function applySettings(nextSettings = state.settings) {
+    state.settings = {
+      layout: ["horizontal", "vertical-wide", "vertical-portable"].includes(nextSettings.layout)
+        ? nextSettings.layout
+        : "horizontal",
+      handedness: nextSettings.handedness === "left" ? "left" : "right",
+    };
+    app.dataset.layout = state.settings.layout;
+    app.dataset.handedness = state.settings.handedness;
+    layoutSelect.value = state.settings.layout;
+    document.querySelectorAll('input[name="handedness"]').forEach((radio) => {
+      radio.checked = radio.value === state.settings.handedness;
+    });
+    try {
+      localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(state.settings));
+    } catch {
+      // Keep the in-memory setting when storage is unavailable.
+    }
+    fitQuestionText();
+    if (!learningScreen.hidden) {
+      window.requestAnimationFrame(resizeCanvas);
+    }
+  }
+
+  function setSettingsOpen(isOpen) {
+    settingsOverlay.hidden = !isOpen;
+    if (isOpen) {
+      dataStatus.textContent = `${state.questions.length}問を読み込み中。1回の出題は最大${MAX_SESSION_QUESTIONS}問です。`;
+      settingsCloseButton.focus({ preventScroll: true });
+    } else {
+      settingsButton.focus({ preventScroll: true });
+    }
+  }
+
+  function installQuestionCsv(csvText, { persist = true, closeSettings = true } = {}) {
+    const parsed = parseCsv(csvText);
+    if (parsed.length === 0) {
+      dataStatus.textContent = "読み込めませんでした。列順と必須項目（問部・解答）を確認してください。";
+      return false;
+    }
+
+    state.sourceCsv = String(csvText);
+    state.questions = parsed;
+    if (persist) {
+      try {
+        localStorage.setItem(STORAGE_KEYS.customCsv, state.sourceCsv);
+      } catch {
+        // Continue without persistence.
+      }
+    }
+    dataStatus.textContent = `${parsed.length}問を読み込みました。`;
+    startSession();
+    if (closeSettings) {
+      setSettingsOpen(false);
+    }
+    return true;
+  }
+
+  function loadSampleQuestions({ closeSettings = false } = {}) {
+    csvTextarea.value = SAMPLE_CSV;
+    try {
+      localStorage.removeItem(STORAGE_KEYS.customCsv);
+    } catch {
+      // Ignore storage failures.
+    }
+    installQuestionCsv(SAMPLE_CSV, { persist: false, closeSettings });
+  }
+
   async function init() {
-    setResult(messages.loading, "message");
+    applySettings(initialSettings);
+    let storedCsv = "";
+    try {
+      storedCsv = localStorage.getItem(STORAGE_KEYS.customCsv) || "";
+    } catch {
+      storedCsv = "";
+    }
+
+    const initialCsv = storedCsv || SAMPLE_CSV;
+    csvTextarea.value = initialCsv;
+    if (!installQuestionCsv(initialCsv, { persist: false, closeSettings: false })) {
+      loadSampleQuestions();
+    }
+
     resizeCanvas();
     state.nativeRecognizer = await createNativeRecognizer();
     updateActionButtons();
     setBusy(false);
-    setResult(messages.empty, "message");
+    const record = getActiveInputRecord();
+    if (!record.text && record.strokes.length === 0) {
+      setResult(messages.empty, "message");
+    }
   }
 
   function preventCanvasGesture(event) {
@@ -1928,7 +2501,23 @@
   }
 
   function handleKeyDown(event) {
-    if (event.isComposing || event.key.toLowerCase() !== "z") {
+    if (event.key === "Escape") {
+      if (!explanationOverlay.hidden) {
+        closeExplanation();
+      } else if (!settingsOverlay.hidden) {
+        setSettingsOpen(false);
+      } else if (!reviewMenu.hidden) {
+        setReviewMenuOpen(false);
+      }
+      return;
+    }
+
+    if (
+      event.isComposing ||
+      event.key.toLowerCase() !== "z" ||
+      learningScreen.hidden ||
+      !settingsOverlay.hidden
+    ) {
       return;
     }
 
@@ -1950,13 +2539,98 @@
   ["touchstart", "touchmove", "touchend", "touchcancel"].forEach((type) => {
     canvas.addEventListener(type, preventCanvasGesture, { passive: false });
   });
+
   undoButton.addEventListener("click", undoLastStroke);
   clearButton.addEventListener("click", clearPad);
-  slotModeSelect.addEventListener("change", () => setSlotMode(slotModeSelect.value));
   prevSlotButton.addEventListener("click", () => moveSlot(-1));
   nextSlotButton.addEventListener("click", () => moveSlot(1));
-  window.addEventListener("keydown", handleKeyDown);
+  advanceButton.addEventListener("click", handleAdvance);
+  resultBox.addEventListener("click", (event) => {
+    const slot = event.target.closest(".character-slot");
+    if (!slot) {
+      return;
+    }
+    const index = Number(slot.dataset.index);
+    if (Number.isInteger(index)) {
+      const delta = index - state.activeSlotIndex;
+      moveSlot(delta);
+    }
+  });
 
+  reviewButton.addEventListener("click", () => setReviewMenuOpen(reviewMenu.hidden));
+  reviewMenu.addEventListener("click", (event) => {
+    const item = event.target.closest(".review-item");
+    if (!item) {
+      return;
+    }
+    goToProblem(Number(item.dataset.index));
+  });
+
+  settingsButton.addEventListener("click", () => setSettingsOpen(true));
+  settingsCloseButton.addEventListener("click", () => setSettingsOpen(false));
+  settingsOverlay.addEventListener("click", (event) => {
+    if (event.target === settingsOverlay) {
+      setSettingsOpen(false);
+    }
+  });
+  layoutSelect.addEventListener("change", () => {
+    applySettings({ ...state.settings, layout: layoutSelect.value });
+  });
+  document.querySelectorAll('input[name="handedness"]').forEach((radio) => {
+    radio.addEventListener("change", () => {
+      if (radio.checked) {
+        applySettings({ ...state.settings, handedness: radio.value });
+      }
+    });
+  });
+
+  csvFileInput.addEventListener("change", async () => {
+    const file = csvFileInput.files?.[0];
+    if (!file) {
+      return;
+    }
+    try {
+      csvTextarea.value = await file.text();
+      dataStatus.textContent = `${file.name}を読み込みました。「読み込む」で反映します。`;
+    } catch {
+      dataStatus.textContent = "ファイルを読み取れませんでした。";
+    }
+  });
+  importCsvButton.addEventListener("click", () => installQuestionCsv(csvTextarea.value));
+  sampleDataButton.addEventListener("click", () => loadSampleQuestions({ closeSettings: true }));
+  clearStatsButton.addEventListener("click", () => {
+    if (!window.confirm("累計出題回数と正解数を消去しますか？")) {
+      return;
+    }
+    state.stats = {};
+    state.questions.forEach((question) => {
+      question.totalAttempts = 0;
+      question.correctCount = 0;
+    });
+    try {
+      localStorage.removeItem(STORAGE_KEYS.stats);
+    } catch {
+      // Ignore storage failures.
+    }
+    dataStatus.textContent = "学習記録を消去しました。";
+    startSession();
+  });
+
+  resultList.addEventListener("click", (event) => {
+    const row = event.target.closest(".result-row");
+    if (row) {
+      openExplanation(Number(row.dataset.index));
+    }
+  });
+  explanationOverlay.addEventListener("click", closeExplanation);
+  retryButton.addEventListener("click", startSession);
+  document.addEventListener("pointerdown", (event) => {
+    if (!reviewMenu.hidden && !event.target.closest(".review-control")) {
+      setReviewMenuOpen(false);
+    }
+  });
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("resize", fitQuestionText);
   window.addEventListener("pagehide", () => {
     state.nativeRecognizer?.finish?.();
   });
