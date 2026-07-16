@@ -212,8 +212,12 @@
 
   state.strokes = state.slots[0].strokes;
 
+  function isHiraganaOnlyText(text) {
+    return /^[ぁ-ゖゝゞ]+$/u.test(String(text || "").normalize("NFKC"));
+  }
+
   function isFreeMode() {
-    return false;
+    return state.session[state.currentQuestionIndex]?.inputMode === "free";
   }
 
   function getVisibleSlotCount() {
@@ -237,13 +241,16 @@
   }
 
   function getLiveResultText() {
+    if (isFreeMode()) {
+      return state.slots[0]?.text || messages.empty;
+    }
     const chars = state.slots.map((record) => record.text || "□").join("");
     return chars || messages.empty;
   }
 
   function renderResultArea() {
     resultBox.replaceChildren();
-    resultBox.dataset.mode = "slots";
+    resultBox.dataset.mode = isFreeMode() ? "free" : "slots";
     resultBox.dataset.state = "slots";
     const count = getVisibleSlotCount();
     const grid = document.createElement("span");
@@ -256,6 +263,10 @@
       slot.className = "character-slot";
       slot.dataset.index = String(index);
 
+      if (isFreeMode()) {
+        slot.classList.add("is-free-slot");
+      }
+
       if (index === state.activeSlotIndex) {
         slot.classList.add("is-active");
       }
@@ -267,6 +278,11 @@
         message.className = "slot-message";
         message.textContent = record.message;
         slot.append(message);
+      } else if (isFreeMode()) {
+        const label = document.createElement("span");
+        label.className = "free-slot-label";
+        label.textContent = "フリー";
+        slot.append(label);
       }
 
       grid.append(slot);
@@ -281,7 +297,9 @@
     const record = getActiveInputRecord();
 
     if (stateName === "result") {
-      record.text = Array.from(String(text || ""))[0] || "";
+      record.text = isFreeMode()
+        ? String(text || "").normalize("NFKC")
+        : Array.from(String(text || ""))[0] || "";
       record.message = "";
       record.state = "result";
     } else {
@@ -825,7 +843,9 @@
   }
 
   function isAllowedCandidateForCurrentMode(text) {
-    return isFreeMode() || getCharacterLength(text) === 1;
+    return isFreeMode()
+      ? isHiraganaOnlyText(text)
+      : getCharacterLength(text) === 1;
   }
 
   function getStrokeTolerance(expectedCount, text) {
@@ -2039,7 +2059,9 @@
   function updateActionButtons() {
     const count = getVisibleSlotCount();
     undoButton.disabled = state.strokes.length === 0;
-    slotPosition.textContent = `${state.activeSlotIndex + 1} / ${count}`;
+    slotPosition.textContent = isFreeMode()
+      ? "フリー"
+      : `${state.activeSlotIndex + 1} / ${count}`;
     slotPosition.dataset.atStart = state.activeSlotIndex <= 0 ? "true" : "false";
     slotPosition.dataset.atEnd = state.activeSlotIndex >= count - 1 ? "true" : "false";
   }
@@ -2104,6 +2126,7 @@
       back: String(back),
       rawAnswer: cleanRawAnswer,
       answer,
+      inputMode: isHiraganaOnlyText(answer) ? "free" : "slots",
       explanation: String(explanation).trim() || "解説は登録されていません。",
       totalAttempts: Math.max(0, Number(saved.totalAttempts) || 0),
       correctCount: Math.max(0, Number(saved.correctCount) || 0),
@@ -2132,10 +2155,14 @@
   }
 
   function createSessionItem(question) {
+    const inputMode = question.inputMode === "free" ? "free" : "slots";
     const characters = Array.from(question.answer);
     return {
       question,
-      slots: characters.map(createInputRecord),
+      inputMode,
+      slots: inputMode === "free"
+        ? [createInputRecord()]
+        : characters.map(createInputRecord),
       activeSlotIndex: 0,
       answerText: "",
       isCorrect: false,
@@ -2143,6 +2170,9 @@
   }
 
   function getItemAnswer(item, placeholder = false) {
+    if (item.inputMode === "free") {
+      return item.slots[0]?.text || (placeholder ? "□" : "");
+    }
     return item.slots
       .map((record) => record.text || (placeholder ? "□" : ""))
       .join("");

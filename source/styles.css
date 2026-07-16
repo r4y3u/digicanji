@@ -286,6 +286,25 @@ button {
   line-height: 1;
 }
 
+.result-box[data-mode="free"] .slot-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.character-slot.is-free-slot {
+  padding: 0.2em 0.45em;
+  font-size: clamp(1.1rem, 5.5vmin, 3rem);
+  letter-spacing: 0.08em;
+  overflow-wrap: anywhere;
+}
+
+.free-slot-label {
+  color: var(--muted);
+  font-size: clamp(0.68rem, 1.8vmin, 0.88rem);
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  opacity: 0.72;
+}
+
 .character-slot.is-active {
   border-color: rgba(240, 211, 106, 0.9);
   box-shadow:
@@ -783,6 +802,14 @@ input:focus-visible,
   left: 50%;
   transform: translate(-50%, -50%) rotate(90deg);
   transform-origin: center center;
+}
+
+
+.app[data-layout="vertical-wide"] .character-slot.is-free-slot,
+.app[data-layout="vertical-portable"] .character-slot.is-free-slot {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 0.12em;
 }
 
 /* 結果 */
