@@ -484,20 +484,40 @@
   }
 
   function getCanvasCoordinates(event) {
+    const localWidth = Math.max(1, canvas.clientWidth);
+    const localHeight = Math.max(1, canvas.clientHeight);
+
+    // A transformed ancestor can make getBoundingClientRect()-based pointer mapping
+    // disagree with the coordinates reported by some iOS Chromium browsers.
+    // offsetX/offsetY are already expressed in the canvas' untransformed local
+    // coordinate system, so prefer them whenever the event is still targeted at
+    // the captured canvas. Safari and desktop browsers retain the fallback below.
+    const hasLocalOffset =
+      event?.target === canvas &&
+      Number.isFinite(event.offsetX) &&
+      Number.isFinite(event.offsetY);
+
+    if (hasLocalOffset) {
+      return {
+        x: Math.min(Math.max(event.offsetX, 0), localWidth),
+        y: Math.min(Math.max(event.offsetY, 0), localHeight),
+      };
+    }
+
     const rect = canvas.getBoundingClientRect();
     const displayX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
     const displayY = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
 
     if (getPortableRotation() === "clockwise") {
       return {
-        x: (displayY / Math.max(1, rect.height)) * canvas.clientWidth,
-        y: ((rect.width - displayX) / Math.max(1, rect.width)) * canvas.clientHeight,
+        x: (displayY / Math.max(1, rect.height)) * localWidth,
+        y: ((rect.width - displayX) / Math.max(1, rect.width)) * localHeight,
       };
     }
 
     return {
-      x: (displayX / Math.max(1, rect.width)) * canvas.clientWidth,
-      y: (displayY / Math.max(1, rect.height)) * canvas.clientHeight,
+      x: (displayX / Math.max(1, rect.width)) * localWidth,
+      y: (displayY / Math.max(1, rect.height)) * localHeight,
     };
   }
 
@@ -2210,7 +2230,7 @@
       preview.textContent = `${item.question.front}${item.question.prompt}${item.question.back}`;
       const status = document.createElement("span");
       status.className = "review-status";
-      status.textContent = item.slots.some((record) => record.text) ? "入力済" : "—";
+      status.textContent = item.slots.some((record) => record.text) ? "入力済み" : "—";
       button.append(number, preview, status);
       reviewMenu.append(button);
     });
