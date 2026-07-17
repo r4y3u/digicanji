@@ -29,7 +29,19 @@
   const explanationOverlay = document.querySelector("#explanation-overlay");
   const explanationTitle = document.querySelector("#explanation-title");
   const explanationText = document.querySelector("#explanation-text");
+  const traceNowButton = document.querySelector("#trace-now-button");
+  const explanationCloseButton = document.querySelector("#explanation-close-button");
+  const traceOverlay = document.querySelector("#trace-overlay");
+  const traceDialog = document.querySelector("#trace-dialog");
+  const traceSurface = document.querySelector("#trace-surface");
+  const traceQuestionText = document.querySelector("#trace-question-text");
+  const tracePadStage = document.querySelector("#trace-pad-stage");
+  const traceCanvas = document.querySelector("#trace-pad");
+  const traceUndoButton = document.querySelector("#trace-undo-button");
+  const traceClearButton = document.querySelector("#trace-clear-button");
+  const traceOkButton = document.querySelector("#trace-ok-button");
   const context = canvas.getContext("2d");
+  const traceContext = traceCanvas.getContext("2d");
   const strokeCounts = window.JP_STROKE_COUNTS || {};
   const quizPackage = safeJsonParse(
     document.querySelector("#digicanji-quiz-data")?.textContent || "{}",
@@ -201,6 +213,16 @@
     settings: initialSettings,
     resultsCommitted: false,
     resultTimers: [],
+    explanationIndex: -1,
+    trace: {
+      itemIndex: -1,
+      answer: "",
+      strokes: [],
+      activePointerId: null,
+      activeStroke: null,
+      lastPoint: null,
+      canvasCssSize: { width: 0, height: 0 },
+    },
   };
 
   const messages = {
@@ -2433,6 +2455,7 @@
     if (!item) {
       return;
     }
+    state.explanationIndex = index;
     explanationTitle.textContent = `正解：${item.question.answer}`;
     explanationText.textContent = item.question.explanation;
     explanationOverlay.hidden = false;
@@ -2440,6 +2463,336 @@
 
   function closeExplanation() {
     explanationOverlay.hidden = true;
+  }
+
+  function renderTraceQuestion(question) {
+    traceQuestionText.replaceChildren();
+    const front = document.createElement("span");
+    front.className = "question-part question-front";
+    front.textContent = question.front;
+    const prompt = document.createElement("span");
+    prompt.className = "question-part question-prompt";
+    prompt.textContent = question.prompt;
+    const back = document.createElement("span");
+    back.className = "question-part question-back";
+    back.textContent = question.back;
+    traceQuestionText.append(front, prompt, back);
+    traceQuestionText.setAttribute("aria-label", `${question.front}${question.prompt}${question.back}`);
+  }
+
+  function fitTraceQuestionText() {
+    traceQuestionText.style.removeProperty("font-size");
+    window.requestAnimationFrame(() => {
+      if (traceOverlay.hidden) {
+        return;
+      }
+      const maxHeight = traceQuestionText.clientHeight;
+      const maxWidth = traceQuestionText.clientWidth;
+      if (!maxHeight || !maxWidth) {
+        return;
+      }
+      let size = Number.parseFloat(getComputedStyle(traceQuestionText).fontSize) || 22;
+      let attempts = 0;
+      while (
+        attempts < 14 &&
+        (traceQuestionText.scrollHeight > maxHeight + 1 || traceQuestionText.scrollWidth > maxWidth + 1) &&
+        size > 11
+      ) {
+        size -= 1;
+        traceQuestionText.style.fontSize = `${size}px`;
+        attempts += 1;
+      }
+    });
+  }
+
+  function isTraceVerticalLayout() {
+    return traceOverlay.dataset.layout !== "horizontal";
+  }
+
+  function isTracePortableRotated() {
+    return traceOverlay.dataset.portableRotated === "true";
+  }
+
+  let traceLayoutFrame = 0;
+
+  function fitTraceLayout() {
+    traceLayoutFrame = 0;
+    if (traceOverlay.hidden) {
+      return;
+    }
+
+    const dialogRect = traceDialog.getBoundingClientRect();
+    const shouldRotate =
+      traceOverlay.dataset.layout === "vertical-portable" &&
+      dialogRect.height > dialogRect.width &&
+      dialogRect.width > 0;
+
+    traceOverlay.dataset.portableRotated = shouldRotate ? "true" : "false";
+    if (shouldRotate) {
+      traceSurface.style.width = `${dialogRect.height}px`;
+      traceSurface.style.height = `${dialogRect.width}px`;
+    } else {
+      traceSurface.style.removeProperty("width");
+      traceSurface.style.removeProperty("height");
+    }
+
+    tracePadStage.style.removeProperty("width");
+    tracePadStage.style.removeProperty("height");
+    tracePadStage.style.removeProperty("place-self");
+
+    if (traceOverlay.dataset.layout === "horizontal") {
+      tracePadStage.style.width = "100%";
+      tracePadStage.style.height = "100%";
+      tracePadStage.style.placeSelf = "stretch";
+      const available = tracePadStage.getBoundingClientRect();
+      const side = Math.max(1, Math.min(available.width, available.height));
+      tracePadStage.style.width = `${side}px`;
+      tracePadStage.style.height = `${side}px`;
+      tracePadStage.style.placeSelf = "center";
+    }
+
+    fitTraceQuestionText();
+    resizeTraceCanvas();
+  }
+
+  function scheduleTraceLayoutFit() {
+    if (traceLayoutFrame) {
+      window.cancelAnimationFrame(traceLayoutFrame);
+    }
+    traceLayoutFrame = window.requestAnimationFrame(fitTraceLayout);
+  }
+
+  function getTraceCanvasSize() {
+    return {
+      width: Math.max(1, traceCanvas.clientWidth),
+      height: Math.max(1, traceCanvas.clientHeight),
+    };
+  }
+
+  function scaleTraceInk(fromSize, toSize) {
+    const scaleX = toSize.width / Math.max(1, fromSize.width);
+    const scaleY = toSize.height / Math.max(1, fromSize.height);
+    if (Math.abs(scaleX - 1) < 0.005 && Math.abs(scaleY - 1) < 0.005) {
+      return;
+    }
+    state.trace.strokes.forEach((stroke) => {
+      stroke.forEach((point) => {
+        point.x *= scaleX;
+        point.y *= scaleY;
+      });
+    });
+  }
+
+  function resizeTraceCanvas() {
+    if (traceOverlay.hidden) {
+      return;
+    }
+    const size = getTraceCanvasSize();
+    const ratio = window.devicePixelRatio || 1;
+    const previous = state.trace.canvasCssSize;
+    if (previous.width > 0 && previous.height > 0) {
+      scaleTraceInk(previous, size);
+    }
+    state.trace.canvasCssSize = size;
+    traceCanvas.width = Math.max(1, Math.round(size.width * ratio));
+    traceCanvas.height = Math.max(1, Math.round(size.height * ratio));
+    traceContext.setTransform(ratio, 0, 0, ratio, 0, 0);
+    drawTraceCanvas();
+  }
+
+  function getTraceLineWidth() {
+    const size = getTraceCanvasSize();
+    const shorterSide = Math.min(size.width, size.height);
+    return Math.max(MIN_LINE_WIDTH, Math.min(MAX_LINE_WIDTH, shorterSide * LINE_WIDTH_RATIO));
+  }
+
+  function drawTraceTemplate() {
+    const answerChars = Array.from(String(state.trace.answer || ""));
+    if (answerChars.length === 0) {
+      return;
+    }
+    const { width, height } = getTraceCanvasSize();
+    const vertical = isTraceVerticalLayout();
+    const count = answerChars.length;
+    const usableWidth = width * 0.82;
+    const usableHeight = height * 0.82;
+    const fontSize = vertical
+      ? Math.max(22, Math.min(usableWidth * 0.72, usableHeight / Math.max(1, count) * 0.82))
+      : Math.max(22, Math.min(usableHeight * 0.72, usableWidth / Math.max(1, count) * 0.82));
+
+    traceContext.save();
+    traceContext.fillStyle = "rgba(244, 240, 223, 0.20)";
+    traceContext.textAlign = "center";
+    traceContext.textBaseline = "middle";
+    traceContext.font = `900 ${fontSize}px "BIZ UDPMincho", "Yu Mincho", "Hiragino Mincho ProN", serif`;
+
+    answerChars.forEach((char, index) => {
+      const x = vertical ? width / 2 : width * 0.09 + (usableWidth * (index + 0.5)) / count;
+      const y = vertical ? height * 0.09 + (usableHeight * (index + 0.5)) / count : height / 2;
+      traceContext.fillText(char, x, y);
+    });
+    traceContext.restore();
+  }
+
+  function drawTraceStrokePoint(point, previousPoint) {
+    const lineWidth = getTraceLineWidth();
+    traceContext.lineCap = "round";
+    traceContext.lineJoin = "round";
+    traceContext.strokeStyle = INK_COLOR;
+    traceContext.fillStyle = INK_COLOR;
+    traceContext.lineWidth = lineWidth;
+    if (!previousPoint) {
+      traceContext.beginPath();
+      traceContext.arc(point.x, point.y, lineWidth / 2, 0, Math.PI * 2);
+      traceContext.fill();
+      return;
+    }
+    traceContext.beginPath();
+    traceContext.moveTo(previousPoint.x, previousPoint.y);
+    traceContext.lineTo(point.x, point.y);
+    traceContext.stroke();
+  }
+
+  function drawTraceCanvas() {
+    const { width, height } = getTraceCanvasSize();
+    traceContext.clearRect(0, 0, width, height);
+    drawTraceTemplate();
+    state.trace.strokes.forEach((stroke) => {
+      stroke.forEach((point, index) => {
+        drawTraceStrokePoint(point, index === 0 ? null : stroke[index - 1]);
+      });
+    });
+    traceUndoButton.disabled = state.trace.strokes.length === 0;
+  }
+
+  function getTraceCanvasCoordinates(event) {
+    const localWidth = Math.max(1, traceCanvas.clientWidth);
+    const localHeight = Math.max(1, traceCanvas.clientHeight);
+    const hasLocalOffset =
+      event?.target === traceCanvas &&
+      Number.isFinite(event.offsetX) &&
+      Number.isFinite(event.offsetY);
+
+    if (hasLocalOffset) {
+      return {
+        x: Math.min(Math.max(event.offsetX, 0), localWidth),
+        y: Math.min(Math.max(event.offsetY, 0), localHeight),
+      };
+    }
+
+    const rect = traceCanvas.getBoundingClientRect();
+    const displayX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const displayY = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
+    if (isTracePortableRotated()) {
+      return {
+        x: (displayY / Math.max(1, rect.height)) * localWidth,
+        y: ((rect.width - displayX) / Math.max(1, rect.width)) * localHeight,
+      };
+    }
+    return {
+      x: (displayX / Math.max(1, rect.width)) * localWidth,
+      y: (displayY / Math.max(1, rect.height)) * localHeight,
+    };
+  }
+
+  function beginTraceStroke(event) {
+    event.preventDefault();
+    state.trace.activePointerId = event.pointerId;
+    state.trace.activeStroke = [];
+    state.trace.lastPoint = null;
+    state.trace.strokes.push(state.trace.activeStroke);
+    traceCanvas.setPointerCapture?.(event.pointerId);
+    addTracePoint(event);
+    traceUndoButton.disabled = false;
+  }
+
+  function addTracePoint(event) {
+    if (event.pointerId !== state.trace.activePointerId || !state.trace.activeStroke) {
+      return;
+    }
+    const point = getTraceCanvasCoordinates(event);
+    state.trace.activeStroke.push(point);
+    drawTraceStrokePoint(point, state.trace.lastPoint);
+    state.trace.lastPoint = point;
+  }
+
+  function continueTraceStroke(event) {
+    if (event.pointerId !== state.trace.activePointerId) {
+      return;
+    }
+    event.preventDefault();
+    const samples = typeof event.getCoalescedEvents === "function"
+      ? event.getCoalescedEvents()
+      : [event];
+    samples.forEach(addTracePoint);
+  }
+
+  function finishTraceStroke(event) {
+    if (event.pointerId !== state.trace.activePointerId) {
+      return;
+    }
+    event.preventDefault();
+    if (state.trace.activeStroke && state.trace.activeStroke.length === 1) {
+      const first = state.trace.activeStroke[0];
+      state.trace.activeStroke.push({ x: first.x + 0.01, y: first.y + 0.01 });
+    }
+    state.trace.activePointerId = null;
+    state.trace.activeStroke = null;
+    state.trace.lastPoint = null;
+    drawTraceCanvas();
+  }
+
+  function undoTraceStroke() {
+    if (state.trace.strokes.length === 0) {
+      return;
+    }
+    state.trace.strokes.pop();
+    drawTraceCanvas();
+  }
+
+  function clearTracePad() {
+    state.trace.strokes.length = 0;
+    state.trace.activePointerId = null;
+    state.trace.activeStroke = null;
+    state.trace.lastPoint = null;
+    drawTraceCanvas();
+  }
+
+  function openTracePractice() {
+    const item = state.session[state.explanationIndex];
+    if (!item) {
+      return;
+    }
+    state.trace.itemIndex = state.explanationIndex;
+    state.trace.answer = item.question.answer;
+    state.trace.strokes = [];
+    state.trace.activePointerId = null;
+    state.trace.activeStroke = null;
+    state.trace.lastPoint = null;
+    state.trace.canvasCssSize = { width: 0, height: 0 };
+    traceOverlay.dataset.layout = state.settings.layout;
+    traceOverlay.dataset.handedness = state.settings.handedness;
+    traceOverlay.dataset.portableRotated = "false";
+    renderTraceQuestion(item.question);
+    explanationOverlay.hidden = true;
+    traceOverlay.hidden = false;
+    scheduleTraceLayoutFit();
+    window.requestAnimationFrame(() => traceOkButton.focus({ preventScroll: true }));
+  }
+
+  function closeTracePractice() {
+    if (traceOverlay.hidden) {
+      return;
+    }
+    traceOverlay.hidden = true;
+    state.trace.activePointerId = null;
+    state.trace.activeStroke = null;
+    state.trace.lastPoint = null;
+    traceSurface.style.removeProperty("width");
+    traceSurface.style.removeProperty("height");
+    scheduleLayoutFit();
+    const row = resultList.querySelector(`.result-row[data-index="${state.trace.itemIndex}"]`);
+    row?.focus?.({ preventScroll: true });
   }
 
   function applySettings(nextSettings = state.settings) {
@@ -2460,7 +2813,12 @@
     } catch {
       // Keep the in-memory setting when storage is unavailable.
     }
+    traceOverlay.dataset.layout = state.settings.layout;
+    traceOverlay.dataset.handedness = state.settings.handedness;
     scheduleLayoutFit();
+    if (!traceOverlay.hidden) {
+      scheduleTraceLayoutFit();
+    }
   }
 
   function setSettingsOpen(isOpen) {
@@ -2520,7 +2878,9 @@
 
   function handleKeyDown(event) {
     if (event.key === "Escape") {
-      if (!explanationOverlay.hidden) {
+      if (!traceOverlay.hidden) {
+        closeTracePractice();
+      } else if (!explanationOverlay.hidden) {
         closeExplanation();
       } else if (!settingsOverlay.hidden) {
         setSettingsOpen(false);
@@ -2531,6 +2891,17 @@
     }
 
     if (event.isComposing || isEditableTarget(event.target)) {
+      return;
+    }
+
+    if (!traceOverlay.hidden) {
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        undoTraceStroke();
+      } else if (event.key === "Enter") {
+        event.preventDefault();
+        closeTracePractice();
+      }
       return;
     }
 
@@ -2673,7 +3044,31 @@
       openExplanation(Number(row.dataset.index));
     }
   });
+  traceNowButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    openTracePractice();
+  });
+  explanationCloseButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeExplanation();
+  });
   explanationOverlay.addEventListener("click", closeExplanation);
+
+  traceCanvas.addEventListener("pointerdown", beginTraceStroke);
+  traceCanvas.addEventListener("pointermove", continueTraceStroke);
+  traceCanvas.addEventListener("pointerup", finishTraceStroke);
+  traceCanvas.addEventListener("pointercancel", finishTraceStroke);
+  traceCanvas.addEventListener("dblclick", preventCanvasGesture);
+  traceCanvas.addEventListener("contextmenu", preventCanvasGesture);
+  traceCanvas.addEventListener("selectstart", preventCanvasGesture);
+  traceCanvas.addEventListener("dragstart", preventCanvasGesture);
+  ["touchstart", "touchmove", "touchend", "touchcancel"].forEach((type) => {
+    traceCanvas.addEventListener(type, preventCanvasGesture, { passive: false });
+  });
+  traceUndoButton.addEventListener("click", undoTraceStroke);
+  traceClearButton.addEventListener("click", clearTracePad);
+  traceOkButton.addEventListener("click", closeTracePractice);
+
   retryButton.addEventListener("click", startSession);
   document.addEventListener("pointerdown", (event) => {
     if (!reviewMenu.hidden && !event.target.closest(".review-control")) {
@@ -2682,10 +3077,12 @@
   });
   window.addEventListener("keydown", handleKeyDown);
   window.addEventListener("resize", scheduleLayoutFit);
+  window.addEventListener("resize", scheduleTraceLayoutFit);
   window.addEventListener("pagehide", () => {
     state.nativeRecognizer?.finish?.();
   });
 
   new ResizeObserver(scheduleLayoutFit).observe(screenShell);
+  new ResizeObserver(scheduleTraceLayoutFit).observe(traceDialog);
   init();
 })();
