@@ -1695,6 +1695,109 @@ input:focus-visible,
   }
 }
 
+
+/* なぞり書き v0.3.5: 模範字を大きく表示し、認識結果を確認できる。 */
+.trace-result-box {
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: clamp(4px, 0.8vw, 8px);
+  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.trace-recognition-text {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-family: "BIZ UDPGothic", "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+  font-size: clamp(1.15rem, 5vmin, 3.1rem);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.trace-recognition-status {
+  min-height: 1.25em;
+  color: var(--muted);
+  font-size: clamp(0.62rem, 1.6vmin, 0.82rem);
+  font-weight: 850;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.trace-result-box[data-state="recognizing"] .trace-recognition-text {
+  opacity: 0.66;
+}
+
+.trace-result-box[data-state="correct"] {
+  border-color: var(--correct);
+  background: rgba(64, 116, 76, 0.22);
+  box-shadow: inset 0 0 0 2px rgba(184, 228, 190, 0.12), 0 0 18px rgba(184, 228, 190, 0.08);
+}
+
+.trace-result-box[data-state="correct"] .trace-recognition-text,
+.trace-result-box[data-state="correct"] .trace-recognition-status {
+  color: var(--correct);
+}
+
+.trace-result-box[data-state="incorrect"] {
+  border-color: rgba(239, 177, 170, 0.78);
+  background: rgba(115, 57, 52, 0.18);
+}
+
+.trace-result-box[data-state="incorrect"] .trace-recognition-status {
+  color: var(--incorrect);
+}
+
+.trace-overlay[data-layout="vertical-wide"] .trace-recognition-text,
+.trace-overlay[data-layout="vertical-portable"] .trace-recognition-text,
+.trace-overlay[data-layout="vertical-wide"] .trace-recognition-status,
+.trace-overlay[data-layout="vertical-portable"] .trace-recognition-status {
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+}
+
+.trace-overlay[data-layout="vertical-wide"] .trace-result-box,
+.trace-overlay[data-layout="vertical-portable"] .trace-result-box {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.trace-overlay[data-layout="vertical-wide"] .trace-recognition-status,
+.trace-overlay[data-layout="vertical-portable"] .trace-recognition-status {
+  min-width: 1.25em;
+  min-height: 0;
+}
+
+/* なぞり書き v0.3.5: 教科書向けゴシック、最大表示、認識確認。 */
+.trace-pad-stage {
+  container-type: size;
+}
+
+.trace-result-box[data-state="writing"] .trace-recognition-text,
+.trace-result-box[data-state="recognizing"] .trace-recognition-text {
+  opacity: 0.72;
+}
+
+.trace-result-box[data-state="idle"] .trace-recognition-text {
+  font-size: clamp(0.82rem, 2vmin, 1rem);
+  letter-spacing: 0.12em;
+}
+
+.trace-result-box[data-state="correct"] .trace-recognition-status::before {
+  content: "○ ";
+}
+
+.trace-result-box[data-state="incorrect"] .trace-recognition-status::before {
+  content: "△ ";
+}
+
+@media (max-width: 620px) {
+  .trace-recognition-text {
+    font-size: clamp(1rem, 6vmin, 2.25rem);
+  }
+}
+
 </style>
     <script id="digicanji-quiz-data" type="application/json">
 {
@@ -7404,7 +7507,10 @@ input:focus-visible,
         <div id="trace-surface" class="trace-surface">
           <section class="trace-question-answer-panel" aria-label="問題文とフリー認識枠">
             <p id="trace-question-text" class="trace-question-text"></p>
-            <output class="trace-result-box" aria-label="フリー認識枠"><span class="trace-free-label">フリー</span></output>
+            <output id="trace-result-box" class="trace-result-box" aria-label="フリー認識枠" data-state="idle">
+              <span id="trace-recognition-text" class="trace-recognition-text">フリー</span>
+              <span id="trace-recognition-status" class="trace-recognition-status" aria-live="polite"></span>
+            </output>
           </section>
 
           <section id="trace-pad-stage" class="trace-pad-stage" aria-label="なぞり書きパッド">
@@ -7462,6 +7568,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const traceDialog = document.querySelector("#trace-dialog");
   const traceSurface = document.querySelector("#trace-surface");
   const traceQuestionText = document.querySelector("#trace-question-text");
+  const traceResultBox = document.querySelector("#trace-result-box");
+  const traceRecognitionText = document.querySelector("#trace-recognition-text");
+  const traceRecognitionStatus = document.querySelector("#trace-recognition-status");
   const tracePadStage = document.querySelector("#trace-pad-stage");
   const traceCanvas = document.querySelector("#trace-pad");
   const traceUndoButton = document.querySelector("#trace-undo-button");
@@ -7491,8 +7600,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const DRAG_START_DISTANCE_MOUSE = 8;
   const DRAG_START_DISTANCE_TOUCH = 10;
   const MIN_RECOGNITION_INK_LENGTH = 36;
-  const RECOGNITION_DRAW_DELAY_MS = 140;
-  const RECOGNITION_FINISH_DELAY_MS = 70;
+  const RECOGNITION_DRAW_DELAY_MS = 180;
+  const RECOGNITION_FINISH_DELAY_MS = 55;
+  const TRACE_RECOGNITION_DELAY_MS = 90;
+  const RECOGNITION_POINT_DISTANCE = 2.25;
+  const RECOGNITION_MAX_POINTS_PER_STROKE = 180;
   const RECOGNITION_RETRY_DELAY_MS = 120;
   const STABILITY_CONFIRM_DELAY_MS = 260;
   const STABILITY_MIN_CONFIRMATIONS = 2;
@@ -7623,6 +7735,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     nativeFailed: false,
     googleFailed: false,
     nextRecognitionDelay: RECOGNITION_RETRY_DELAY_MS,
+    recognitionCache: { fingerprint: "", text: "" },
+    googleAbortController: null,
     candidateStability: {
       text: "",
       signature: "",
@@ -7648,6 +7762,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       activePointerId: null,
       activeStroke: null,
       lastPoint: null,
+      strokeStartTime: 0,
+      recognitionTimer: 0,
+      recognitionSerial: 0,
+      isRecognizing: false,
+      needsRecognition: false,
+      nativeDrawing: null,
+      googleFailed: false,
+      recognizedText: "",
+      recognitionCache: { fingerprint: "", text: "" },
+      googleAbortController: null,
+      pointerType: "",
       canvasCssSize: { width: 0, height: 0 },
     },
   };
@@ -7950,42 +8075,59 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     };
   }
 
-  function getCanvasCoordinates(event) {
-    const localWidth = Math.max(1, canvas.clientWidth);
-    const localHeight = Math.max(1, canvas.clientHeight);
+  function clampUnit(value) {
+    return Math.min(1, Math.max(0, value));
+  }
 
-    // A transformed ancestor can make getBoundingClientRect()-based pointer mapping
-    // disagree with the coordinates reported by some iOS Chromium browsers.
-    // offsetX/offsetY are already expressed in the canvas' untransformed local
-    // coordinate system, so prefer them whenever the event is still targeted at
-    // the captured canvas. Safari and desktop browsers retain the fallback below.
-    const hasLocalOffset =
-      event?.target === canvas &&
-      Number.isFinite(event.offsetX) &&
-      Number.isFinite(event.offsetY);
+  function mapViewportPointToCanvas(targetCanvas, event, rotatedClockwise = false) {
+    const rect = targetCanvas.getBoundingClientRect();
+    const localWidth = Math.max(1, targetCanvas.clientWidth);
+    const localHeight = Math.max(1, targetCanvas.clientHeight);
+    const rectWidth = Math.max(1, rect.width);
+    const rectHeight = Math.max(1, rect.height);
 
-    if (hasLocalOffset) {
+    // clientX/clientY and DOMRect are both viewport-relative. Normalizing them
+    // first avoids browser-dependent offsetX/offsetY behavior on transformed
+    // ancestors, which is especially inconsistent in some iOS browsers.
+    const normalizedX = clampUnit((Number(event.clientX) - rect.left) / rectWidth);
+    const normalizedY = clampUnit((Number(event.clientY) - rect.top) / rectHeight);
+
+    if (rotatedClockwise) {
       return {
-        x: Math.min(Math.max(event.offsetX, 0), localWidth),
-        y: Math.min(Math.max(event.offsetY, 0), localHeight),
-      };
-    }
-
-    const rect = canvas.getBoundingClientRect();
-    const displayX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
-    const displayY = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
-
-    if (getPortableRotation() === "clockwise") {
-      return {
-        x: (displayY / Math.max(1, rect.height)) * localWidth,
-        y: ((rect.width - displayX) / Math.max(1, rect.width)) * localHeight,
+        x: normalizedY * localWidth,
+        y: (1 - normalizedX) * localHeight,
       };
     }
 
     return {
-      x: (displayX / Math.max(1, rect.width)) * localWidth,
-      y: (displayY / Math.max(1, rect.height)) * localHeight,
+      x: normalizedX * localWidth,
+      y: normalizedY * localHeight,
     };
+  }
+
+  function getCanvasCoordinates(event) {
+    return mapViewportPointToCanvas(
+      canvas,
+      event,
+      getPortableRotation() === "clockwise",
+    );
+  }
+
+  function getStrokesFingerprint(strokes) {
+    return strokes
+      .filter((stroke) => stroke.length > 0)
+      .map((stroke) => {
+        const first = stroke[0] || { x: 0, y: 0 };
+        const last = stroke[stroke.length - 1] || first;
+        return [
+          stroke.length,
+          Math.round(first.x),
+          Math.round(first.y),
+          Math.round(last.x),
+          Math.round(last.y),
+        ].join(":");
+      })
+      .join("|");
   }
 
   function hasInk() {
@@ -8016,6 +8158,59 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       width: Math.max(1, Math.round(logicalSize.width)),
       height: Math.max(1, Math.round(logicalSize.height)),
     };
+  }
+
+  function compressStrokeForRecognition(stroke) {
+    if (!Array.isArray(stroke) || stroke.length <= 2) {
+      return Array.isArray(stroke) ? stroke : [];
+    }
+
+    const compressed = [stroke[0]];
+    let last = stroke[0];
+    for (let index = 1; index < stroke.length - 1; index += 1) {
+      const point = stroke[index];
+      if (getDistance(last, point) >= RECOGNITION_POINT_DISTANCE) {
+        compressed.push(point);
+        last = point;
+      }
+    }
+    compressed.push(stroke[stroke.length - 1]);
+
+    if (compressed.length <= RECOGNITION_MAX_POINTS_PER_STROKE) {
+      return compressed;
+    }
+
+    const sampled = [];
+    const lastIndex = compressed.length - 1;
+    for (let index = 0; index < RECOGNITION_MAX_POINTS_PER_STROKE; index += 1) {
+      const sourceIndex = Math.round((lastIndex * index) / (RECOGNITION_MAX_POINTS_PER_STROKE - 1));
+      sampled.push(compressed[sourceIndex]);
+    }
+    return sampled;
+  }
+
+  let preferredGoogleTransport = null;
+
+  function getGoogleTransports() {
+    const transports = [];
+    const contentTypes = ["text/plain;charset=UTF-8", "application/json"];
+    GOOGLE_HANDWRITING_URLS.forEach((url) => {
+      contentTypes.forEach((contentType) => transports.push({ url, contentType }));
+    });
+    if (!preferredGoogleTransport) {
+      return transports;
+    }
+    return [
+      preferredGoogleTransport,
+      ...transports.filter((item) =>
+        item.url !== preferredGoogleTransport.url || item.contentType !== preferredGoogleTransport.contentType
+      ),
+    ];
+  }
+
+  function cancelGoogleRecognition(scope = state) {
+    scope.googleAbortController?.abort?.();
+    scope.googleAbortController = null;
   }
 
   async function queryNativeSupport(constraint) {
@@ -8092,12 +8287,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.nativeDrawing.clear();
 
     for (const stroke of state.strokes) {
-      if (stroke.length === 0) {
+      const recognitionStroke = compressStrokeForRecognition(stroke);
+      if (recognitionStroke.length === 0) {
         continue;
       }
 
       const nativeStroke = new HandwritingStroke();
-      stroke.forEach((point) => {
+      recognitionStroke.forEach((point) => {
         nativeStroke.addPoint({
           x: point.x,
           y: point.y,
@@ -8129,17 +8325,18 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
   }
 
-  function buildGoogleInk() {
-    return state.strokes
+  function buildGoogleInk(strokes = state.strokes) {
+    return strokes
+      .map(compressStrokeForRecognition)
       .filter((stroke) => stroke.length > 0)
       .map((stroke) => [
         stroke.map((point) => Math.round(point.x)),
         stroke.map((point) => Math.round(point.y)),
-        stroke.map((point) => Math.round(point.t)),
+        stroke.map((point) => Math.round(point.t || 0)),
       ]);
   }
 
-  async function postGooglePayload(url, payload, contentType) {
+  async function postGooglePayload(url, payload, contentType, signal) {
     const response = await fetch(url, {
       method: "POST",
       mode: "cors",
@@ -8148,6 +8345,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         "Content-Type": contentType,
       },
       body: JSON.stringify(payload),
+      signal,
     });
 
     if (!response.ok) {
@@ -8199,21 +8397,37 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       ],
     };
 
-    const contentTypes = ["text/plain;charset=UTF-8", "application/json"];
+    cancelGoogleRecognition(state);
+    const controller = new AbortController();
+    state.googleAbortController = controller;
 
-    for (const url of GOOGLE_HANDWRITING_URLS) {
-      for (const contentType of contentTypes) {
+    try {
+      for (const transport of getGoogleTransports()) {
+        if (controller.signal.aborted) {
+          return [];
+        }
         try {
-          const data = await postGooglePayload(url, payload, contentType);
+          const data = await postGooglePayload(
+            transport.url,
+            payload,
+            transport.contentType,
+            controller.signal,
+          );
           const candidates = extractCandidatesFromGoogleResponse(data);
-
           if (candidates.length > 0) {
+            preferredGoogleTransport = transport;
             state.googleFailed = false;
             return candidates;
           }
-        } catch {
-          // Try the next endpoint/content-type pair.
+        } catch (error) {
+          if (controller.signal.aborted || error?.name === "AbortError") {
+            return [];
+          }
         }
+      }
+    } finally {
+      if (state.googleAbortController === controller) {
+        state.googleAbortController = null;
       }
     }
 
@@ -9197,6 +9411,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function prepareStroke(event) {
     window.clearTimeout(state.recognitionTimer);
+    cancelGoogleRecognition(state);
     resetCandidateStability();
     state.pendingPointerId = event.pointerId;
     state.pendingStartPoint = getCanvasCoordinates(event);
@@ -9230,7 +9445,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.pendingStartPoint = null;
     state.pendingPointerType = "";
     setBusy(true);
-    scheduleRecognition(RECOGNITION_DRAW_DELAY_MS);
   }
 
   function addPreparedPoint(point) {
@@ -9288,7 +9502,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         : [event];
 
     events.forEach(addPoint);
-    scheduleRecognition(RECOGNITION_DRAW_DELAY_MS);
   }
 
   function finishStroke(event) {
@@ -9367,11 +9580,22 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     try {
       state.nextRecognitionDelay = RECOGNITION_RETRY_DELAY_MS;
       const strokeStats = estimateInputStrokeStats();
-      const nativeCandidates = await recognizeWithNative();
-      let text = selectDisplayCandidate(nativeCandidates, strokeStats);
+      const fingerprint = `${isFreeMode() ? "free" : "character"}:${getStrokesFingerprint(state.strokes)}`;
+      let text = "";
 
-      if (!text) {
-        text = selectDisplayCandidate(await recognizeWithGoogle(), strokeStats);
+      if (state.recognitionCache.fingerprint === fingerprint) {
+        text = state.recognitionCache.text;
+      } else {
+        const nativeCandidates = await recognizeWithNative();
+        text = selectDisplayCandidate(nativeCandidates, strokeStats);
+
+        if (!text) {
+          text = selectDisplayCandidate(await recognizeWithGoogle(), strokeStats);
+        }
+
+        if (text) {
+          state.recognitionCache = { fingerprint, text };
+        }
       }
 
       if (serial !== state.recognitionSerial || !hasMeaningfulInk()) {
@@ -9397,16 +9621,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     } finally {
       state.isRecognizing = false;
 
-      if (serial !== state.recognitionSerial) {
-        return;
-      }
-
       if (state.needsRecognition) {
         const delay = state.nextRecognitionDelay || RECOGNITION_RETRY_DELAY_MS;
         state.needsRecognition = false;
         state.nextRecognitionDelay = RECOGNITION_RETRY_DELAY_MS;
         scheduleRecognition(delay);
-      } else {
+      } else if (serial === state.recognitionSerial) {
         setBusy(false);
       }
     }
@@ -9430,6 +9650,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function activateCurrentInput({ recognizeIfNeeded = true } = {}) {
     window.clearTimeout(state.recognitionTimer);
+    cancelGoogleRecognition(state);
     state.recognitionSerial += 1;
     resetPointerState();
     resetNativeDrawing();
@@ -9468,6 +9689,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
 
     window.clearTimeout(state.recognitionTimer);
+    cancelGoogleRecognition(state);
     state.recognitionSerial += 1;
     resetPointerState();
     resetNativeDrawing();
@@ -9488,6 +9710,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function clearPad() {
     window.clearTimeout(state.recognitionTimer);
+    cancelGoogleRecognition(state);
     state.recognitionSerial += 1;
     resetPointerState();
     resetNativeDrawing();
@@ -10033,29 +10256,64 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return Math.max(MIN_LINE_WIDTH, Math.min(MAX_LINE_WIDTH, shorterSide * LINE_WIDTH_RATIO));
   }
 
+  function getTraceTemplateGrid(count, width, height, vertical) {
+    const usableWidth = width * 0.9;
+    const usableHeight = height * 0.9;
+    let best = { rows: count, columns: 1, cellSize: 0, score: -Infinity };
+
+    for (let columns = 1; columns <= count; columns += 1) {
+      const rows = Math.ceil(count / columns);
+      const cellWidth = usableWidth / columns;
+      const cellHeight = usableHeight / rows;
+      const cellSize = Math.min(cellWidth, cellHeight);
+      const unused = rows * columns - count;
+      const orientationFit = vertical
+        ? (rows >= columns ? 1.035 : 0.97)
+        : (columns >= rows ? 1.035 : 0.97);
+      const score = cellSize * orientationFit - unused * cellSize * 0.035;
+      if (score > best.score) {
+        best = { rows, columns, cellSize, score };
+      }
+    }
+
+    return {
+      ...best,
+      cellWidth: usableWidth / best.columns,
+      cellHeight: usableHeight / best.rows,
+      startX: (width - usableWidth) / 2,
+      startY: (height - usableHeight) / 2,
+    };
+  }
+
   function drawTraceTemplate() {
     const answerChars = Array.from(String(state.trace.answer || ""));
     if (answerChars.length === 0) {
       return;
     }
+
     const { width, height } = getTraceCanvasSize();
     const vertical = isTraceVerticalLayout();
-    const count = answerChars.length;
-    const usableWidth = width * 0.82;
-    const usableHeight = height * 0.82;
-    const fontSize = vertical
-      ? Math.max(22, Math.min(usableWidth * 0.72, usableHeight / Math.max(1, count) * 0.82))
-      : Math.max(22, Math.min(usableHeight * 0.72, usableWidth / Math.max(1, count) * 0.82));
+    const grid = getTraceTemplateGrid(answerChars.length, width, height, vertical);
+    const fontSize = Math.max(30, Math.min(grid.cellWidth, grid.cellHeight) * 0.82);
 
     traceContext.save();
-    traceContext.fillStyle = "rgba(244, 240, 223, 0.20)";
+    traceContext.fillStyle = "rgba(244, 240, 223, 0.19)";
     traceContext.textAlign = "center";
     traceContext.textBaseline = "middle";
-    traceContext.font = `900 ${fontSize}px "BIZ UDPMincho", "Yu Mincho", "Hiragino Mincho ProN", serif`;
+    traceContext.font = `700 ${fontSize}px "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif`;
 
     answerChars.forEach((char, index) => {
-      const x = vertical ? width / 2 : width * 0.09 + (usableWidth * (index + 0.5)) / count;
-      const y = vertical ? height * 0.09 + (usableHeight * (index + 0.5)) / count : height / 2;
+      let row;
+      let column;
+      if (vertical) {
+        row = index % grid.rows;
+        column = grid.columns - 1 - Math.floor(index / grid.rows);
+      } else {
+        row = Math.floor(index / grid.columns);
+        column = index % grid.columns;
+      }
+      const x = grid.startX + grid.cellWidth * (column + 0.5);
+      const y = grid.startY + grid.cellHeight * (row + 0.52);
       traceContext.fillText(char, x, y);
     });
     traceContext.restore();
@@ -10093,37 +10351,272 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function getTraceCanvasCoordinates(event) {
-    const localWidth = Math.max(1, traceCanvas.clientWidth);
-    const localHeight = Math.max(1, traceCanvas.clientHeight);
-    const hasLocalOffset =
-      event?.target === traceCanvas &&
-      Number.isFinite(event.offsetX) &&
-      Number.isFinite(event.offsetY);
+    return mapViewportPointToCanvas(
+      traceCanvas,
+      event,
+      isTracePortableRotated(),
+    );
+  }
 
-    if (hasLocalOffset) {
-      return {
-        x: Math.min(Math.max(event.offsetX, 0), localWidth),
-        y: Math.min(Math.max(event.offsetY, 0), localHeight),
-      };
+  function getTraceInkBounds() {
+    const points = state.trace.strokes.flat().filter(Boolean);
+    if (points.length === 0) {
+      return null;
     }
-
-    const rect = traceCanvas.getBoundingClientRect();
-    const displayX = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
-    const displayY = Math.min(Math.max(event.clientY - rect.top, 0), rect.height);
-    if (isTracePortableRotated()) {
-      return {
-        x: (displayY / Math.max(1, rect.height)) * localWidth,
-        y: ((rect.width - displayX) / Math.max(1, rect.width)) * localHeight,
-      };
-    }
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    const left = Math.min(...xs);
+    const right = Math.max(...xs);
+    const top = Math.min(...ys);
+    const bottom = Math.max(...ys);
     return {
-      x: (displayX / Math.max(1, rect.width)) * localWidth,
-      y: (displayY / Math.max(1, rect.height)) * localHeight,
+      left,
+      right,
+      top,
+      bottom,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top),
     };
+  }
+
+  function hasMeaningfulTraceInk() {
+    const bounds = getTraceInkBounds();
+    if (!bounds) {
+      return false;
+    }
+    const totalLength = state.trace.strokes.reduce(
+      (total, stroke) => total + getStrokeLength(stroke),
+      0,
+    );
+    return totalLength >= MIN_RECOGNITION_INK_LENGTH &&
+      Math.max(bounds.width, bounds.height) >= MIN_RECOGNITION_INK_LENGTH * 0.55;
+  }
+
+  function setTraceRecognition(text = "フリー", visualState = "idle", status = "") {
+    state.trace.recognizedText = visualState === "correct" || visualState === "incorrect" ? text : "";
+    traceRecognitionText.textContent = text;
+    traceRecognitionStatus.textContent = status;
+    traceResultBox.dataset.state = visualState;
+  }
+
+  function resetTraceNativeDrawing() {
+    if (state.trace.nativeDrawing) {
+      state.trace.nativeDrawing.clear?.();
+      state.trace.nativeDrawing = null;
+    }
+  }
+
+  function cancelTraceRecognition() {
+    window.clearTimeout(state.trace.recognitionTimer);
+    state.trace.recognitionSerial += 1;
+    state.trace.needsRecognition = false;
+    cancelGoogleRecognition(state.trace);
+    resetTraceNativeDrawing();
+  }
+
+  function ensureTraceNativeDrawing() {
+    if (!state.nativeRecognizer || state.nativeFailed) {
+      return null;
+    }
+    if (!state.trace.nativeDrawing) {
+      const hints = {
+        recognitionType: "text",
+        inputType: SUPPORTED_POINTER_TYPES.has(state.trace.pointerType)
+          ? state.trace.pointerType
+          : undefined,
+        alternatives: 5,
+      };
+      Object.keys(hints).forEach((key) => {
+        if (hints[key] === undefined) {
+          delete hints[key];
+        }
+      });
+      try {
+        state.trace.nativeDrawing = state.nativeRecognizer.startDrawing(hints);
+      } catch {
+        state.trace.nativeDrawing = state.nativeRecognizer.startDrawing({
+          recognitionType: "text",
+          alternatives: 5,
+        });
+      }
+    }
+
+    state.trace.nativeDrawing.clear();
+    for (const stroke of state.trace.strokes) {
+      const recognitionStroke = compressStrokeForRecognition(stroke);
+      if (recognitionStroke.length === 0) {
+        continue;
+      }
+      const nativeStroke = new HandwritingStroke();
+      recognitionStroke.forEach((point) => {
+        nativeStroke.addPoint({ x: point.x, y: point.y, t: point.t || 0 });
+      });
+      state.trace.nativeDrawing.addStroke(nativeStroke);
+    }
+    return state.trace.nativeDrawing;
+  }
+
+  async function recognizeTraceWithNative() {
+    const drawing = ensureTraceNativeDrawing();
+    if (!drawing) {
+      return [];
+    }
+    try {
+      const predictions = await drawing.getPrediction();
+      return normalizeCandidates(predictions?.map((prediction) => prediction?.text) || []);
+    } catch {
+      resetTraceNativeDrawing();
+      return [];
+    }
+  }
+
+  async function recognizeTraceWithGoogle() {
+    const guide = getTraceCanvasSize();
+    const payload = {
+      device: navigator.userAgent,
+      options: "enable_pre_space",
+      requests: [
+        {
+          writing_guide: {
+            writing_area_width: Math.max(1, Math.round(guide.width)),
+            writing_area_height: Math.max(1, Math.round(guide.height)),
+          },
+          ink: buildGoogleInk(state.trace.strokes),
+          language: "ja",
+        },
+      ],
+    };
+
+    cancelGoogleRecognition(state.trace);
+    const controller = new AbortController();
+    state.trace.googleAbortController = controller;
+    try {
+      for (const transport of getGoogleTransports()) {
+        if (controller.signal.aborted) {
+          return [];
+        }
+        try {
+          const data = await postGooglePayload(
+            transport.url,
+            payload,
+            transport.contentType,
+            controller.signal,
+          );
+          const candidates = extractCandidatesFromGoogleResponse(data);
+          if (candidates.length > 0) {
+            preferredGoogleTransport = transport;
+            state.trace.googleFailed = false;
+            return candidates;
+          }
+        } catch (error) {
+          if (controller.signal.aborted || error?.name === "AbortError") {
+            return [];
+          }
+        }
+      }
+    } finally {
+      if (state.trace.googleAbortController === controller) {
+        state.trace.googleAbortController = null;
+      }
+    }
+    state.trace.googleFailed = true;
+    return [];
+  }
+
+  function selectTraceCandidate(candidates) {
+    const target = normalizeComparableText(state.trace.answer);
+    const usable = normalizeCandidates(candidates)
+      .filter(isJapaneseCandidate)
+      .map((text, index) => ({
+        text,
+        index,
+        normalized: normalizeComparableText(text),
+      }));
+    const exact = usable.find((entry) => entry.normalized === target);
+    if (exact) {
+      return exact.text;
+    }
+    usable.sort((a, b) => {
+      const aDistance = Math.abs(getCharacterLength(a.normalized) - getCharacterLength(target));
+      const bDistance = Math.abs(getCharacterLength(b.normalized) - getCharacterLength(target));
+      return aDistance - bDistance || a.index - b.index;
+    });
+    return usable[0]?.text || "";
+  }
+
+  function scheduleTraceRecognition(delay = TRACE_RECOGNITION_DELAY_MS) {
+    window.clearTimeout(state.trace.recognitionTimer);
+    if (!hasMeaningfulTraceInk()) {
+      setTraceRecognition(
+        state.trace.strokes.length > 0 ? "候補なし" : "フリー",
+        "idle",
+        state.trace.strokes.length > 0 ? "もう少し大きく書いてください" : "",
+      );
+      return;
+    }
+    setTraceRecognition("認識中…", "recognizing", "");
+    state.trace.recognitionTimer = window.setTimeout(runTraceRecognition, delay);
+  }
+
+  async function runTraceRecognition() {
+    if (!hasMeaningfulTraceInk() || traceOverlay.hidden) {
+      return;
+    }
+    if (state.trace.isRecognizing) {
+      state.trace.needsRecognition = true;
+      return;
+    }
+
+    state.trace.isRecognizing = true;
+    const serial = ++state.trace.recognitionSerial;
+    try {
+      const fingerprint = `${normalizeComparableText(state.trace.answer)}:${getStrokesFingerprint(state.trace.strokes)}`;
+      let text = "";
+      if (state.trace.recognitionCache.fingerprint === fingerprint) {
+        text = state.trace.recognitionCache.text;
+      } else {
+        text = selectTraceCandidate(await recognizeTraceWithNative());
+        if (!text) {
+          text = selectTraceCandidate(await recognizeTraceWithGoogle());
+        }
+        if (text) {
+          state.trace.recognitionCache = { fingerprint, text };
+        }
+      }
+
+      if (serial !== state.trace.recognitionSerial || traceOverlay.hidden || !hasMeaningfulTraceInk()) {
+        return;
+      }
+
+      if (!text) {
+        setTraceRecognition(
+          state.trace.googleFailed ? "接続できません" : "候補なし",
+          "idle",
+          state.trace.googleFailed ? "認識サービスに接続できません" : "書き直して確認してください",
+        );
+        return;
+      }
+
+      const correct = normalizeComparableText(text) === normalizeComparableText(state.trace.answer);
+      setTraceRecognition(
+        text,
+        correct ? "correct" : "incorrect",
+        correct ? "模範解答と一致しています" : "模範解答と異なります",
+      );
+    } finally {
+      state.trace.isRecognizing = false;
+      if (state.trace.needsRecognition && !traceOverlay.hidden) {
+        state.trace.needsRecognition = false;
+        scheduleTraceRecognition(TRACE_RECOGNITION_DELAY_MS);
+      }
+    }
   }
 
   function beginTraceStroke(event) {
     event.preventDefault();
+    cancelTraceRecognition();
+    state.trace.pointerType = event.pointerType || "";
+    state.trace.strokeStartTime = performance.now();
     state.trace.activePointerId = event.pointerId;
     state.trace.activeStroke = [];
     state.trace.lastPoint = null;
@@ -10137,7 +10630,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (event.pointerId !== state.trace.activePointerId || !state.trace.activeStroke) {
       return;
     }
-    const point = getTraceCanvasCoordinates(event);
+    const point = {
+      ...getTraceCanvasCoordinates(event),
+      t: Math.round(performance.now() - state.trace.strokeStartTime),
+    };
     state.trace.activeStroke.push(point);
     drawTraceStrokePoint(point, state.trace.lastPoint);
     state.trace.lastPoint = point;
@@ -10167,22 +10663,27 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
     drawTraceCanvas();
+    scheduleTraceRecognition();
   }
 
   function undoTraceStroke() {
     if (state.trace.strokes.length === 0) {
       return;
     }
+    cancelTraceRecognition();
     state.trace.strokes.pop();
     drawTraceCanvas();
+    scheduleTraceRecognition();
   }
 
   function clearTracePad() {
+    cancelTraceRecognition();
     state.trace.strokes.length = 0;
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
     drawTraceCanvas();
+    setTraceRecognition("フリー", "idle", "");
   }
 
   function openTracePractice() {
@@ -10190,6 +10691,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (!item) {
       return;
     }
+    cancelTraceRecognition();
     state.trace.itemIndex = state.explanationIndex;
     state.trace.answer = item.question.answer;
     state.trace.strokes = [];
@@ -10197,6 +10699,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
     state.trace.canvasCssSize = { width: 0, height: 0 };
+    state.trace.recognizedText = "";
+    state.trace.recognitionCache = { fingerprint: "", text: "" };
+    state.trace.googleFailed = false;
+    setTraceRecognition("フリー", "idle", "");
     traceOverlay.dataset.layout = state.settings.layout;
     traceOverlay.dataset.handedness = state.settings.handedness;
     traceOverlay.dataset.portableRotated = "false";
@@ -10211,6 +10717,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (traceOverlay.hidden) {
       return;
     }
+    cancelTraceRecognition();
     traceOverlay.hidden = true;
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
@@ -10506,6 +11013,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   window.addEventListener("resize", scheduleLayoutFit);
   window.addEventListener("resize", scheduleTraceLayoutFit);
   window.addEventListener("pagehide", () => {
+    cancelGoogleRecognition(state);
+    cancelTraceRecognition();
     state.nativeRecognizer?.finish?.();
   });
 
