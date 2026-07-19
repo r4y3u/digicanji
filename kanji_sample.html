@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.0.1" />
+    <meta name="application-version" content="1.1.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -32,6 +32,7 @@
   --incorrect: #efb1aa;
   --shadow: rgba(0, 0, 0, 0.28);
   --radius: clamp(9px, 1.6vw, 14px);
+  --educational-font: "UD Digi Kyokasho NP-R", "YuKyokasho", "Yu Kyokasho", "Hiragino Mincho ProN", "BIZ UDPMincho", serif;
 }
 
 * {
@@ -237,6 +238,7 @@ button {
   align-content: center;
   overflow: hidden;
   color: var(--ink);
+  font-family: var(--educational-font);
   font-size: clamp(1.12rem, 4.1vmin, 2rem);
   font-weight: 700;
   line-height: 1.65;
@@ -254,7 +256,7 @@ button {
   padding: 0.03em 0.16em 0.08em;
   border-bottom: 0.13em solid var(--accent);
   color: #fffaf0;
-  font-family: "BIZ UDPMincho", "Yu Mincho", "Hiragino Mincho ProN", serif;
+  font-family: var(--educational-font);
   font-weight: 900;
   letter-spacing: 0.12em;
   text-shadow: 0 0 12px rgba(240, 211, 106, 0.14);
@@ -304,6 +306,7 @@ button {
 
 .character-slot.is-free-slot {
   padding: 0.2em 0.45em;
+  font-family: var(--educational-font);
   font-size: clamp(1.1rem, 5.5vmin, 3rem);
   letter-spacing: 0.08em;
   overflow-wrap: anywhere;
@@ -327,6 +330,7 @@ button {
 .slot-message {
   padding: 0 0.2em;
   color: var(--muted);
+  font-family: var(--educational-font);
   font-size: clamp(0.58rem, 1.8vmin, 0.82rem);
   font-weight: 800;
   line-height: 1.2;
@@ -1199,6 +1203,32 @@ input:focus-visible,
 }
 
 
+.recognition-diagnostics-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.recognition-diagnostics-button {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: rgba(15, 31, 25, 0.58);
+  color: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.recognition-diagnostics-count {
+  display: inline-block;
+  margin-left: 0.35em;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+
 .danger-zone {
   text-align: right;
 }
@@ -1436,6 +1466,7 @@ input:focus-visible,
   align-content: center;
   overflow: hidden;
   color: var(--ink);
+  font-family: var(--educational-font);
   font-size: clamp(1.12rem, 4.1vmin, 2rem);
   font-weight: 700;
   line-height: 1.65;
@@ -1453,7 +1484,7 @@ input:focus-visible,
   padding: 0.03em 0.16em 0.08em;
   border-bottom: 0.13em solid var(--accent);
   color: #fffaf0;
-  font-family: "BIZ UDPMincho", "Yu Mincho", "Hiragino Mincho ProN", serif;
+  font-family: var(--educational-font);
   font-weight: 900;
   letter-spacing: 0.12em;
 }
@@ -1474,6 +1505,7 @@ input:focus-visible,
 
 .trace-free-label {
   color: var(--muted);
+  font-family: var(--educational-font);
   font-size: clamp(0.75rem, 2vmin, 0.95rem);
   font-weight: 850;
   letter-spacing: 0.14em;
@@ -1709,7 +1741,7 @@ input:focus-visible,
   max-width: 100%;
   overflow-wrap: anywhere;
   color: var(--muted);
-  font-family: "BIZ UDPGothic", "Noto Sans JP", "Yu Gothic", "Meiryo", sans-serif;
+  font-family: var(--educational-font);
   font-size: clamp(1.15rem, 5vmin, 3.1rem);
   font-weight: 800;
   line-height: 1.12;
@@ -1770,7 +1802,7 @@ input:focus-visible,
   min-height: 0;
 }
 
-/* なぞり書き v0.3.5: 教科書向けゴシック、最大表示、認識確認。 */
+/* なぞり書き: 教科書体の統一、最大表示、認識確認。 */
 .trace-pad-stage {
   container-type: size;
 }
@@ -7556,6 +7588,15 @@ input:focus-visible,
           </div>
         </div>
 
+        <div id="recognition-diagnostics-group" class="settings-group" hidden>
+          <span class="settings-label">認識診断<span id="recognition-diagnostics-count" class="recognition-diagnostics-count"></span></span>
+          <p class="settings-note">実筆座標、候補列、画数判定、構造検査の結果を端末内に最大40件保存します。</p>
+          <div class="recognition-diagnostics-actions">
+            <button id="export-recognition-diagnostics-button" class="recognition-diagnostics-button" type="button">JSONを書き出す</button>
+            <button id="clear-recognition-diagnostics-button" class="recognition-diagnostics-button" type="button">診断記録を消す</button>
+          </div>
+        </div>
+
         <div class="settings-group danger-zone">
           <button id="clear-stats-button" class="text-button" type="button">学習記録を消去</button>
         </div>
@@ -7629,6 +7670,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const settingsCloseButton = document.querySelector("#settings-close-button");
   const layoutSelect = document.querySelector("#layout-select");
   const clearStatsButton = document.querySelector("#clear-stats-button");
+  const recognitionDiagnosticsGroup = document.querySelector("#recognition-diagnostics-group");
+  const recognitionDiagnosticsCount = document.querySelector("#recognition-diagnostics-count");
+  const exportRecognitionDiagnosticsButton = document.querySelector("#export-recognition-diagnostics-button");
+  const clearRecognitionDiagnosticsButton = document.querySelector("#clear-recognition-diagnostics-button");
   const resultList = document.querySelector("#result-list");
   const scoreSummary = document.querySelector("#score-summary");
   const retryButton = document.querySelector("#retry-button");
@@ -7687,10 +7732,24 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const STORAGE_KEYS = Object.freeze({
     settings: "digicanji.settings.v2",
     stats: `digicanji.stats.v2.${quizId}`,
+    recognitionCorpus: `digicanji.recognition-corpus.v1.${quizId}`,
   });
   const SUPPLEMENTAL_STROKE_COUNTS = Object.freeze({
     "鱸": 27,
   });
+
+  // ひらがなは、活字の筆画数と学校で用いる手書き字形の筆画数が一致しない場合がある。
+  // 文字ごとの例外表ではなく、語全体の長さと基準画数から短縮可能量を算出する。
+  // 濁点・半濁点は省略可能量に含めず、実際の追加筆画を必須とする。
+  const KANA_STROKE_SHORTFALL_RATIO = 0.26;
+  const KANA_STROKE_SHORTFALL_PER_CHAR = 0.72;
+  const KANA_STROKE_SOFT_MARGIN = 1;
+  const COMBINING_DAKUTEN = "゙";
+  const COMBINING_HANDAKUTEN = "゚";
+  const SMALL_KANA_PATTERN = /^[ぁぃぅぇぉゃゅょっゎァィゥェォャュョッヮヵヶ]$/u;
+  const MAX_RECOGNITION_CORPUS_RECORDS = 40;
+  const RECOGNITION_DEBUG_QUERY = new URLSearchParams(window.location.search).get("recognitionDebug");
+  const RECOGNITION_DIAGNOSTICS_ENABLED = RECOGNITION_DEBUG_QUERY === "1" || RECOGNITION_DEBUG_QUERY === "true";
 
   const EDUCATIONAL_GLYPH_NORMALIZATION = Object.freeze({
     "來": "来",
@@ -7733,20 +7792,73 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     },
   ]);
 
-  // Fonts differ substantially by device. These small, original vector overrides keep
-  // the school-handwriting forms of kana whose strokes are often visually connected.
-  const EDUCATIONAL_KANA_PATHS = Object.freeze({
-    "り": [
-      "M31 16 C28 31 28 47 32 56 C35 62 41 60 46 53",
-      "M68 14 C72 34 70 54 62 70 C56 82 46 90 35 94",
-    ],
-    "ふ": [
-      "M44 13 C51 16 57 21 61 26",
-      "M53 31 C47 39 43 48 46 55 C49 62 58 61 61 68 C64 76 57 84 45 88",
-      "M25 58 C20 64 17 72 15 80",
-      "M74 56 C82 63 87 72 90 81",
-    ],
-  });
+  const SHITSU_SUFFIX_CHARS = new Set(Array.from("失鉄秩跌"));
+  const BOKUZUKURI_SUFFIX_CHARS = new Set(Array.from("放改攻故政教救敗"));
+  const JU_PREFIX_CHARS = new Set(Array.from("重動"));
+
+  // 構造検査は文字ごとの if 文ではなく、部品・配置規則として登録する。
+  // 同じ部品を持つ文字には、筆画列の先頭・末尾から同じ検査を適用できる。
+  const STRUCTURAL_COMPONENT_RULES = Object.freeze([
+    {
+      id: "upper-box-horizontal-above",
+      applies: (text) => text === "感",
+      test: () => getUpperBoxAndHorizontalRelation() === "horizontal-above",
+    },
+    {
+      id: "upper-box-horizontal-below",
+      applies: (text) => text === "惑",
+      test: () => getUpperBoxAndHorizontalRelation() === "horizontal-below",
+    },
+    {
+      id: "shitsu-component-suffix",
+      applies: (text) => SHITSU_SUFFIX_CHARS.has(text),
+      test: () => hasValidShitsuComponent(Math.max(0, state.strokes.length - 5)),
+    },
+    {
+      id: "shitsu-component-prefix",
+      applies: (text) => text === "迭",
+      test: () => hasValidShitsuComponent(0),
+    },
+    {
+      id: "ben-layout",
+      applies: (text) => text === "便",
+      test: hasValidBenLayout,
+    },
+    {
+      id: "kai-layout",
+      applies: (text) => text === "械",
+      test: hasValidKaiLayout,
+    },
+    {
+      id: "ju-component-prefix",
+      applies: (text) => JU_PREFIX_CHARS.has(text),
+      test: () => hasValidJuComponent(0),
+    },
+    {
+      id: "ju-component-suffix",
+      applies: (text) => text === "種",
+      test: () => hasValidJuComponent(Math.max(0, state.strokes.length - 9)),
+    },
+    {
+      id: "bokuzukuri-suffix",
+      applies: (text) => BOKUZUKURI_SUFFIX_CHARS.has(text),
+      test: () => hasValidBokuzukuriComponent(Math.max(0, state.strokes.length - 4)),
+    },
+    {
+      id: "reject-you-as-ten",
+      applies: (text) => text === "天",
+      test: () => !hasLikelyYouStructure(),
+    },
+    {
+      id: "reject-crow-as-bird",
+      applies: (text) => text === "鳥",
+      test: () => !hasLikelyCrowStructure(),
+    },
+  ]);
+
+  // 問題文・認識欄・なぞり書きは、端末に標準搭載された教科書体を同じ順序で使用する。
+  // 字ごとの独自ベクター補正は行わず、字体の一貫性を優先する。
+  const EDUCATIONAL_KANA_PATHS = Object.freeze({});
 
   const GOOGLE_HANDWRITING_URLS = [
     "https://www.google.com/inputtools/request?ime=handwriting&app=mobilesearch&cs=1&oe=UTF-8",
@@ -7786,6 +7898,31 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
   }
 
+  function safeStorageSet(key, value) {
+    try {
+      localStorage.setItem(key, value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function safeStorageRemove(key) {
+    try {
+      localStorage.removeItem(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function loadRecognitionCorpus() {
+    const stored = safeJsonParse(safeStorageGet(STORAGE_KEYS.recognitionCorpus), []);
+    return Array.isArray(stored)
+      ? stored.slice(-MAX_RECOGNITION_CORPUS_RECORDS)
+      : [];
+  }
+
   function loadSettings() {
     const stored = safeJsonParse(safeStorageGet(STORAGE_KEYS.settings), {});
     const layout = ["horizontal", "vertical-wide", "vertical-portable"].includes(stored.layout)
@@ -7808,6 +7945,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     pendingStartPoint: null,
     pendingStartTime: 0,
     pendingPointerType: "",
+    lastPointerType: "",
     activePointerId: null,
     activeStrokePoints: null,
     lastPoint: null,
@@ -7827,6 +7965,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     nextRecognitionDelay: RECOGNITION_RETRY_DELAY_MS,
     recognitionCache: { fingerprint: "", text: "" },
     googleAbortController: null,
+    recognitionCorpus: loadRecognitionCorpus(),
+    lastLoggedRecognitionFingerprint: "",
+    lastCandidateEvaluation: null,
     candidateStability: {
       text: "",
       signature: "",
@@ -8443,7 +8584,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const hints = {
         recognitionType: isFreeMode() ? "text" : "per-character",
         inputType: getInputType(),
-        alternatives: 1,
+        alternatives: 8,
       };
 
       Object.keys(hints).forEach((key) => {
@@ -8457,7 +8598,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       } catch {
         state.nativeDrawing = state.nativeRecognizer.startDrawing({
           recognitionType: "text",
-          alternatives: 1,
+          alternatives: 8,
         });
       }
     }
@@ -8513,6 +8654,176 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         stroke.map((point) => Math.round(point.t || 0)),
       ]);
   }
+
+  function persistRecognitionCorpus() {
+    const trimmed = state.recognitionCorpus.slice(-MAX_RECOGNITION_CORPUS_RECORDS);
+    state.recognitionCorpus = trimmed;
+    safeStorageSet(STORAGE_KEYS.recognitionCorpus, JSON.stringify(trimmed));
+    updateRecognitionDiagnosticsUi();
+  }
+
+  function updateRecognitionDiagnosticsUi() {
+    if (recognitionDiagnosticsGroup) {
+      recognitionDiagnosticsGroup.hidden = !RECOGNITION_DIAGNOSTICS_ENABLED;
+    }
+    if (recognitionDiagnosticsCount) {
+      recognitionDiagnosticsCount.textContent = `（${state.recognitionCorpus.length}件）`;
+    }
+  }
+
+  function getRecognitionQuestionContext() {
+    const item = state.session[state.currentQuestionIndex];
+    if (!item) {
+      return null;
+    }
+    return {
+      index: state.currentQuestionIndex,
+      front: item.question?.front || "",
+      prompt: item.question?.prompt || "",
+      back: item.question?.back || "",
+      expectedAnswer: item.question?.answer || "",
+      inputMode: item.inputMode || (isFreeMode() ? "free" : "character"),
+      activeSlotIndex: state.activeSlotIndex,
+    };
+  }
+
+  function getSerializableInkBounds() {
+    const bounds = getInkBounds();
+    if (!bounds) {
+      return null;
+    }
+    return Object.fromEntries(
+      Object.entries(bounds).map(([key, value]) => [key, Math.round(value * 10) / 10]),
+    );
+  }
+
+  function recordRecognitionAttempt({
+    fingerprint,
+    strokeStats,
+    nativeCandidates,
+    googleCandidates,
+    nativeEvaluation,
+    googleEvaluation,
+    selectedText,
+  }) {
+    if (!RECOGNITION_DIAGNOSTICS_ENABLED || !fingerprint) {
+      return;
+    }
+    if (state.lastLoggedRecognitionFingerprint === fingerprint) {
+      return;
+    }
+    state.lastLoggedRecognitionFingerprint = fingerprint;
+
+    const question = getRecognitionQuestionContext();
+    const record = {
+      schemaVersion: 1,
+      appVersion: document.querySelector('meta[name="application-version"]')?.content || "",
+      recordedAt: new Date().toISOString(),
+      quizId,
+      question,
+      selectedMatchesExpected: Boolean(
+        selectedText && question?.expectedAnswer &&
+        normalizeComparableText(selectedText) === normalizeComparableText(question.expectedAnswer)
+      ),
+      layout: state.settings.layout,
+      handedness: state.settings.handedness,
+      pointerType: state.lastPointerType || getInputType() || "unknown",
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio || 1,
+      },
+      userAgent: navigator.userAgent,
+      fingerprint,
+      strokeStats,
+      inkBounds: getSerializableInkBounds(),
+      ink: buildGoogleInk(state.strokes),
+      candidates: {
+        native: nativeCandidates,
+        google: googleCandidates,
+      },
+      evaluations: {
+        native: nativeEvaluation,
+        google: googleEvaluation,
+      },
+      selectedText,
+    };
+
+    state.recognitionCorpus.push(record);
+    persistRecognitionCorpus();
+  }
+
+  function downloadRecognitionCorpus() {
+    const payload = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      quizId,
+      records: state.recognitionCorpus,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.href = url;
+    link.download = `digicanji-recognition-corpus-${stamp}.json`;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  function clearRecognitionCorpus() {
+    state.recognitionCorpus = [];
+    state.lastLoggedRecognitionFingerprint = "";
+    safeStorageRemove(STORAGE_KEYS.recognitionCorpus);
+    updateRecognitionDiagnosticsUi();
+  }
+
+  function runRecognitionSelfTests() {
+    const cases = [];
+    const add = (name, pass, details = null) => {
+      cases.push({ name, pass: Boolean(pass), details });
+    };
+    const containsStrokeCount = (text, count) => {
+      const range = getCandidateStrokeCountRange(text);
+      return {
+        range,
+        pass: Boolean(range && count >= range.softMin && count <= range.max),
+      };
+    };
+
+    const kyoryoku = containsStrokeCount("きょうりょく", 12);
+    add("generic-kana-range-kyoryoku", kyoryoku.pass, kyoryoku.range);
+    const aratameru = containsStrokeCount("あらためる", 12);
+    add("generic-kana-range-aratameru", aratameru.pass, aratameru.range);
+
+    const shi = getKanaStrokeProfile("し");
+    const ji = getKanaStrokeProfile("じ");
+    add(
+      "dakuten-requires-two-strokes",
+      Boolean(shi && ji && ji.min >= shi.min + 2 && ji.max >= shi.max + 2),
+      { shi, ji },
+    );
+
+    const ids = STRUCTURAL_COMPONENT_RULES.map((rule) => rule.id);
+    add("structural-rule-ids-unique", new Set(ids).size === ids.length, ids);
+    add("educational-kana-vector-exceptions-removed", Object.keys(EDUCATIONAL_KANA_PATHS).length === 0);
+
+    return {
+      pass: cases.every((item) => item.pass),
+      cases,
+    };
+  }
+
+  window.DigiCanjiRecognitionDiagnostics = Object.freeze({
+    enabled: RECOGNITION_DIAGNOSTICS_ENABLED,
+    getRecords: () => typeof structuredClone === "function"
+      ? structuredClone(state.recognitionCorpus)
+      : JSON.parse(JSON.stringify(state.recognitionCorpus)),
+    export: downloadRecognitionCorpus,
+    clear: clearRecognitionCorpus,
+    runSelfTests: runRecognitionSelfTests,
+  });
 
   async function postGooglePayload(url, payload, contentType, signal) {
     const response = await fetch(url, {
@@ -8642,20 +8953,78 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return Number.isFinite(count) ? count : null;
   }
 
-  function getCandidateStrokeCount(text) {
-    let total = 0;
+  function getKanaStrokeProfile(text) {
+    const decomposed = Array.from(String(text || "").normalize("NFD"));
+    let baseStrokeCount = 0;
+    let baseCharacterCount = 0;
+    let diacriticStrokeCount = 0;
 
-    for (const char of Array.from(text)) {
+    for (const char of decomposed) {
+      if (char === COMBINING_DAKUTEN) {
+        diacriticStrokeCount += 2;
+        continue;
+      }
+      if (char === COMBINING_HANDAKUTEN) {
+        diacriticStrokeCount += 1;
+        continue;
+      }
+
       const count = getCharStrokeCount(char);
-
       if (!Number.isFinite(count)) {
         return null;
       }
+      baseStrokeCount += count;
+      baseCharacterCount += 1;
+    }
 
+    if (baseCharacterCount === 0 || baseStrokeCount === 0) {
+      return null;
+    }
+
+    const shortfallBudget = Math.min(
+      Math.ceil(baseStrokeCount * KANA_STROKE_SHORTFALL_RATIO),
+      Math.ceil(baseCharacterCount * KANA_STROKE_SHORTFALL_PER_CHAR),
+    );
+    const baseMinimum = Math.max(
+      baseCharacterCount,
+      baseStrokeCount - shortfallBudget,
+    );
+    const min = baseMinimum + diacriticStrokeCount;
+    const max = baseStrokeCount + diacriticStrokeCount;
+
+    return {
+      min,
+      softMin: Math.max(baseCharacterCount + diacriticStrokeCount, min - KANA_STROKE_SOFT_MARGIN),
+      max,
+      baseStrokeCount,
+      baseCharacterCount,
+      diacriticStrokeCount,
+      shortfallBudget,
+    };
+  }
+
+  function getCandidateStrokeCountRange(text) {
+    if (isKanaOnly(text)) {
+      return getKanaStrokeProfile(text);
+    }
+
+    let total = 0;
+    for (const char of Array.from(text)) {
+      const count = getCharStrokeCount(char);
+      if (!Number.isFinite(count)) {
+        return null;
+      }
       total += count;
     }
 
-    return total || null;
+    return total > 0
+      ? { min: total, softMin: total, max: total, shortfallBudget: 0, diacriticStrokeCount: 0 }
+      : null;
+  }
+
+  function getCandidateStrokeCount(text) {
+    const range = getCandidateStrokeCountRange(text);
+    return range ? range.max : null;
   }
 
   function isCjkIdeograph(char) {
@@ -8861,9 +9230,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return eleventhStroke.start.x >= ninthStroke.start.x + bounds.width * 0.035;
   }
 
-  function hasValidShuLayout() {
-    const componentBounds = getStrokeGroupBounds(5, 9);
-    const seventhComponentStroke = getStrokeGeometry(state.strokes[11]);
+  function hasValidJuComponent(startIndex = 0) {
+    const componentBounds = getStrokeGroupBounds(startIndex, 9);
+    const seventhComponentStroke = getStrokeGeometry(state.strokes[startIndex + 6]);
 
     if (!componentBounds || !seventhComponentStroke) {
       return false;
@@ -8880,9 +9249,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return isLongCentralVertical;
   }
 
-  function hasValidHouRightComponent() {
-    const bounds = getStrokeGroupBounds(4, 4);
-    const firstRightStroke = getStrokeGeometry(state.strokes[4]);
+  function hasValidBokuzukuriComponent(startIndex = 0) {
+    const bounds = getStrokeGroupBounds(startIndex, 4);
+    const firstRightStroke = getStrokeGeometry(state.strokes[startIndex]);
 
     if (!bounds || !firstRightStroke) {
       return false;
@@ -9286,48 +9655,26 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return count;
   }
 
+  function evaluateRequiredCandidateStructure(text) {
+    const failedRuleIds = [];
+
+    for (const rule of STRUCTURAL_COMPONENT_RULES) {
+      if (!rule.applies(text)) {
+        continue;
+      }
+      if (!rule.test()) {
+        failedRuleIds.push(rule.id);
+      }
+    }
+
+    return {
+      pass: failedRuleIds.length === 0,
+      failedRuleIds,
+    };
+  }
+
   function hasRequiredCandidateStructure(text) {
-    if (text === "感") {
-      return getUpperBoxAndHorizontalRelation() === "horizontal-above";
-    }
-
-    if (text === "惑") {
-      return getUpperBoxAndHorizontalRelation() === "horizontal-below";
-    }
-
-    if (text === "鉄") {
-      return hasValidShitsuComponent(8);
-    }
-
-    if (text === "失") {
-      return hasValidShitsuComponent(0);
-    }
-
-    if (text === "便") {
-      return hasValidBenLayout();
-    }
-
-    if (text === "械") {
-      return hasValidKaiLayout();
-    }
-
-    if (text === "種") {
-      return hasValidShuLayout();
-    }
-
-    if (text === "放") {
-      return hasValidHouRightComponent();
-    }
-
-    if (text === "天" && hasLikelyYouStructure()) {
-      return false;
-    }
-
-    if (text === "鳥" && hasLikelyCrowStructure()) {
-      return false;
-    }
-
-    return true;
+    return evaluateRequiredCandidateStructure(text).pass;
   }
 
   function simplifyStroke(stroke, minDistance) {
@@ -9603,49 +9950,96 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return 0;
   }
 
-  function isStrokeCompatible(text, strokeStats) {
-    const expectedCount = getCandidateStrokeCount(text);
+  function evaluateStrokeCompatibility(text, strokeStats) {
+    const expectedRange = getCandidateStrokeCountRange(text);
+    const result = {
+      pass: true,
+      reasons: [],
+      expectedRange,
+      scorePenalty: 0,
+      structure: evaluateRequiredCandidateStructure(text),
+    };
 
-    if (!expectedCount) {
-      return isFreeMode();
+    if (!expectedRange) {
+      result.pass = isFreeMode();
+      if (!result.pass) {
+        result.reasons.push("unknown-stroke-count");
+      }
+      return result;
     }
 
-    if (!hasRequiredCandidateStructure(text)) {
-      return false;
+    if (!result.structure.pass) {
+      result.pass = false;
+      result.reasons.push(...result.structure.failedRuleIds.map((id) => `structure:${id}`));
     }
 
     if (hasShinnyouChar(text) && !hasCompletedShinnyouSweep()) {
-      return false;
+      result.pass = false;
+      result.reasons.push("incomplete-shinnyou");
     }
 
     if (hasSanzuiChar(text) && !hasCompletedSanzui()) {
-      return false;
+      result.pass = false;
+      result.reasons.push("incomplete-sanzui");
     }
 
     if (hasKusakanmuriChar(text) && !hasCompletedKusakanmuriTop()) {
-      return false;
+      result.pass = false;
+      result.reasons.push("incomplete-kusakanmuri");
     }
 
+    if (!isFreeCandidateProgressPlausible(text, strokeStats)) {
+      result.pass = false;
+      result.reasons.push("implausible-character-growth");
+    }
+
+    if (isFreeMode() && isKanaOnly(text)) {
+      result.diacritic = evaluateKanaDiacriticEvidence(text);
+      if (!result.diacritic.pass) {
+        result.pass = false;
+        result.reasons.push("missing-diacritic-marks");
+      }
+      if (strokeStats.rawCount > expectedRange.max) {
+        result.pass = false;
+        result.reasons.push("too-many-physical-strokes");
+      }
+      if (strokeStats.rawCount < expectedRange.softMin) {
+        result.pass = false;
+        result.reasons.push("too-few-physical-strokes");
+      }
+      if (strokeStats.virtualCount < expectedRange.softMin) {
+        result.pass = false;
+        result.reasons.push("too-few-virtual-strokes");
+      }
+
+      result.scorePenalty += Math.max(0, expectedRange.min - strokeStats.rawCount) * 1.35;
+      result.scorePenalty += Math.max(0, strokeStats.rawCount - expectedRange.min) * 0.06;
+      return result;
+    }
+
+    const expectedCount = expectedRange.max;
     const tolerance = getStrokeTolerance(expectedCount, text);
     const allowedRawShortfall = getAllowedRawShortfall(expectedCount, text);
     const allowedRawOverage = getAllowedRawOverage(text);
 
-    if (!isFreeCandidateProgressPlausible(text, strokeStats)) {
-      return false;
+    if (strokeStats.virtualCount + tolerance < expectedCount) {
+      result.pass = false;
+      result.reasons.push("too-few-virtual-strokes");
+    }
+    if (strokeStats.rawCount < expectedCount - allowedRawShortfall) {
+      result.pass = false;
+      result.reasons.push("too-few-physical-strokes");
+    }
+    if (strokeStats.rawCount > expectedCount + allowedRawOverage) {
+      result.pass = false;
+      result.reasons.push("too-many-physical-strokes");
     }
 
-    if (isFreeMode() && isKanaOnly(text)) {
-      return (
-        strokeStats.rawCount === expectedCount &&
-        strokeStats.virtualCount >= expectedCount
-      );
-    }
+    return result;
+  }
 
-    return (
-      strokeStats.virtualCount + tolerance >= expectedCount &&
-      strokeStats.rawCount >= expectedCount - allowedRawShortfall &&
-      strokeStats.rawCount <= expectedCount + allowedRawOverage
-    );
+  function isStrokeCompatible(text, strokeStats) {
+    return evaluateStrokeCompatibility(text, strokeStats).pass;
   }
 
   function canUseStructuralAlternative(rule, strokeStats) {
@@ -9680,55 +10074,252 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return expanded;
   }
 
-  function getCandidateStrokeRank(text, strokeStats, originalIndex) {
-    const expectedCount = getCandidateStrokeCount(text);
+  function getMedianNumber(values) {
+    const sorted = values
+      .filter((value) => Number.isFinite(value))
+      .sort((a, b) => a - b);
+    if (sorted.length === 0) {
+      return 0;
+    }
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? (sorted[middle - 1] + sorted[middle]) / 2
+      : sorted[middle];
+  }
 
-    if (!Number.isFinite(expectedCount)) {
+  function getFreeInkSpatialProfile() {
+    const bounds = getInkBounds();
+    const features = getStrokeFeatures();
+    if (!bounds || features.length === 0) {
+      return null;
+    }
+
+    const horizontal = bounds.width >= bounds.height * 0.82;
+    const axisStart = horizontal ? bounds.left : bounds.top;
+    const axisEnd = horizontal ? bounds.right : bounds.bottom;
+    const axisSpan = Math.max(1, axisEnd - axisStart);
+    const extents = features.map((feature) => horizontal ? feature.width : feature.height);
+    const mergePadding = Math.max(4, axisSpan * 0.012, getMedianNumber(extents) * 0.2);
+    const intervals = features
+      .map((feature) => ({
+        start: (horizontal ? feature.left : feature.top) - mergePadding,
+        end: (horizontal ? feature.right : feature.bottom) + mergePadding,
+      }))
+      .sort((a, b) => a.start - b.start);
+    const merged = [];
+
+    intervals.forEach((interval) => {
+      const current = merged[merged.length - 1];
+      if (!current || interval.start > current.end) {
+        merged.push({ ...interval });
+      } else {
+        current.end = Math.max(current.end, interval.end);
+      }
+    });
+
+    return {
+      horizontal,
+      axisStart,
+      axisEnd,
+      axisSpan,
+      crossStart: horizontal ? bounds.top : bounds.left,
+      crossEnd: horizontal ? bounds.bottom : bounds.right,
+      crossSpan: horizontal ? bounds.height : bounds.width,
+      clusterCount: merged.length,
+      features,
+      totalLength: features.reduce((sum, feature) => sum + feature.length, 0),
+    };
+  }
+
+  function getKanaDiacriticRequirements(text) {
+    return Array.from(text).map((char, index) => {
+      const decomposed = Array.from(char.normalize("NFD"));
+      const mark = decomposed.find((part) =>
+        part === COMBINING_DAKUTEN || part === COMBINING_HANDAKUTEN
+      );
+      return mark
+        ? { index, requiredStrokes: mark === COMBINING_DAKUTEN ? 2 : 1, mark }
+        : null;
+    }).filter(Boolean);
+  }
+
+  function evaluateKanaDiacriticEvidence(text, profile = getFreeInkSpatialProfile()) {
+    const requirements = getKanaDiacriticRequirements(text);
+    if (requirements.length === 0) {
+      return { pass: true, requirements: [], matched: [] };
+    }
+    if (!profile) {
+      return { pass: false, requirements, matched: [] };
+    }
+
+    const characterCount = Math.max(1, getCharacterLength(text));
+    const cellSpan = profile.axisSpan / characterCount;
+    const diagonal = Math.hypot(cellSpan, profile.crossSpan);
+    const matched = requirements.map((requirement) => {
+      const cellStart = profile.axisStart + cellSpan * requirement.index;
+      const cellEnd = cellStart + cellSpan;
+      const candidates = profile.features.filter((feature) => {
+        const axisCenter = profile.horizontal ? feature.centerX : feature.centerY;
+        const crossCenter = profile.horizontal ? feature.centerY : feature.centerX;
+        const axisRatio = (axisCenter - cellStart) / Math.max(1, cellSpan);
+        const crossRatio = (crossCenter - profile.crossStart) / Math.max(1, profile.crossSpan);
+        const maxLength = diagonal * (requirement.requiredStrokes === 1 ? 0.68 : 0.48);
+        return (
+          axisRatio >= 0.32 &&
+          axisRatio <= 1.28 &&
+          crossRatio <= 0.58 &&
+          feature.length <= maxLength
+        );
+      });
+      return {
+        ...requirement,
+        foundStrokes: candidates.length,
+        pass: candidates.length >= requirement.requiredStrokes,
+      };
+    });
+
+    return {
+      pass: matched.every((item) => item.pass),
+      requirements,
+      matched,
+    };
+  }
+
+  function getCandidateSpatialFit(text, profile = getFreeInkSpatialProfile()) {
+    const chars = Array.from(text);
+    if (!isFreeMode() || chars.length <= 1 || !profile) {
+      return { penalty: 0, hardReject: false, weakCells: 0, clusterCount: profile?.clusterCount || 0 };
+    }
+
+    const cellSpan = profile.axisSpan / chars.length;
+    const inkByCell = Array(chars.length).fill(0);
+    profile.features.forEach((feature) => {
+      const center = profile.horizontal ? feature.centerX : feature.centerY;
+      const index = Math.max(
+        0,
+        Math.min(chars.length - 1, Math.floor((center - profile.axisStart) / Math.max(1, cellSpan))),
+      );
+      inkByCell[index] += feature.length;
+    });
+
+    const averageInk = profile.totalLength / chars.length;
+    let weakCells = 0;
+    let unsupportedSmallKana = 0;
+    inkByCell.forEach((ink, index) => {
+      const smallKana = SMALL_KANA_PATTERN.test(chars[index]);
+      const threshold = averageInk * (smallKana ? 0.08 : 0.16);
+      if (ink < threshold) {
+        weakCells += 1;
+        if (smallKana && ink < averageInk * 0.035) {
+          unsupportedSmallKana += 1;
+        }
+      }
+    });
+
+    const clusterShortfall = Math.max(0, chars.length - profile.clusterCount - 1);
+    const penalty = weakCells * 1.35 + unsupportedSmallKana * 2.4 + clusterShortfall * 3.2;
+
+    return {
+      penalty,
+      hardReject: clusterShortfall >= 3 || unsupportedSmallKana >= 1,
+      weakCells,
+      unsupportedSmallKana,
+      clusterCount: profile.clusterCount,
+      inkByCell: inkByCell.map((value) => Math.round(value * 10) / 10),
+    };
+  }
+
+  function getCandidateStrokeRank(text, strokeStats, originalIndex) {
+    const expectedRange = getCandidateStrokeCountRange(text);
+
+    if (!expectedRange) {
       return 1000 + originalIndex * 0.01;
     }
 
-    const virtualDistance = Math.abs(strokeStats.virtualCount - expectedCount);
-    const rawDistance = Math.abs(strokeStats.rawCount - expectedCount);
-    const overagePenalty = Math.max(0, strokeStats.rawCount - expectedCount) * 0.35;
+    const nearestVirtual = Math.min(
+      Math.max(strokeStats.virtualCount, expectedRange.min),
+      expectedRange.max,
+    );
+    const nearestRaw = Math.min(
+      Math.max(strokeStats.rawCount, expectedRange.min),
+      expectedRange.max,
+    );
+    const virtualDistance = Math.abs(strokeStats.virtualCount - nearestVirtual);
+    const rawDistance = Math.abs(strokeStats.rawCount - nearestRaw);
+    const overagePenalty = Math.max(0, strokeStats.rawCount - expectedRange.max) * 0.8;
 
-    return virtualDistance * 3 + rawDistance * 0.55 + overagePenalty + originalIndex * 0.01;
+    return (
+      virtualDistance * 2.5 +
+      rawDistance * 0.65 +
+      overagePenalty +
+      originalIndex * 0.12
+    );
   }
 
-  function orderCandidatesByStrokeFit(candidates, strokeStats) {
-    return candidates
-      .map((text, index) => ({
+  function evaluateDisplayCandidates(candidates, strokeStats = estimateInputStrokeStats()) {
+    const normalized = normalizeCandidates(candidates);
+    const structurallyExpanded = expandStructuralAlternatives(normalized, strokeStats);
+    const spatialProfile = getFreeInkSpatialProfile();
+    const evaluations = structurallyExpanded.map((text, index) => {
+      const reasons = [];
+      if (!isJapaneseCandidate(text)) {
+        reasons.push("not-japanese-candidate");
+      }
+      if (!isAllowedCandidateForCurrentMode(text)) {
+        reasons.push("mode-mismatch");
+      }
+
+      const compatibility = reasons.length === 0
+        ? evaluateStrokeCompatibility(text, strokeStats)
+        : { pass: false, reasons: [], scorePenalty: 0, expectedRange: null, structure: null };
+      reasons.push(...compatibility.reasons);
+      const spatial = reasons.length === 0
+        ? getCandidateSpatialFit(text, spatialProfile)
+        : { penalty: 0, hardReject: false };
+      if (spatial.hardReject) {
+        reasons.push("spatial-support-insufficient");
+      }
+
+      const pass = reasons.length === 0;
+      const score = pass
+        ? getCandidateStrokeRank(text, strokeStats, index) +
+          compatibility.scorePenalty +
+          spatial.penalty
+        : Number.POSITIVE_INFINITY;
+
+      return {
         text,
-        rank: getCandidateStrokeRank(text, strokeStats, index),
-      }))
-      .sort((a, b) => a.rank - b.rank)
-      .map((entry) => entry.text);
+        sourceIndex: index,
+        pass,
+        score: Number.isFinite(score) ? Math.round(score * 1000) / 1000 : null,
+        reasons,
+        expectedRange: compatibility.expectedRange,
+        structure: compatibility.structure,
+        spatial,
+      };
+    });
+
+    const accepted = evaluations
+      .filter((evaluation) => evaluation.pass)
+      .sort((a, b) => a.score - b.score || a.sourceIndex - b.sourceIndex);
+
+    return {
+      text: accepted[0]?.text || "",
+      evaluations,
+      normalized,
+      expanded: structurallyExpanded,
+      spatialProfile: spatialProfile
+        ? {
+            horizontal: spatialProfile.horizontal,
+            clusterCount: spatialProfile.clusterCount,
+            axisSpan: Math.round(spatialProfile.axisSpan * 10) / 10,
+          }
+        : null,
+    };
   }
 
   function selectDisplayCandidate(candidates, strokeStats = estimateInputStrokeStats()) {
-    const normalized = normalizeCandidates(candidates);
-
-    if (normalized.length === 0) {
-      return "";
-    }
-
-    const structurallyExpanded = expandStructuralAlternatives(normalized, strokeStats);
-    const japaneseCandidates = structurallyExpanded
-      .filter(isJapaneseCandidate)
-      .filter(isAllowedCandidateForCurrentMode);
-
-    if (japaneseCandidates.length === 0) {
-      return "";
-    }
-
-    const compatibleCandidates = japaneseCandidates.filter((text) =>
-      isStrokeCompatible(text, strokeStats),
-    );
-
-    if (compatibleCandidates.length === 0) {
-      return "";
-    }
-
-    return orderCandidatesByStrokeFit(compatibleCandidates, strokeStats)[0] || "";
+    return evaluateDisplayCandidates(candidates, strokeStats).text;
   }
 
   function isPointerInputActive() {
@@ -9833,6 +10424,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.pendingStartPoint = getCanvasCoordinates(event);
     state.pendingStartTime = performance.now();
     state.pendingPointerType = event.pointerType || "";
+    state.lastPointerType = state.pendingPointerType;
 
     if (typeof canvas.setPointerCapture === "function") {
       canvas.setPointerCapture(event.pointerId);
@@ -9998,16 +10590,31 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const strokeStats = estimateInputStrokeStats();
       const fingerprint = `${isFreeMode() ? "free" : "character"}:${getStrokesFingerprint(state.strokes)}`;
       let text = "";
+      let nativeCandidates = [];
+      let googleCandidates = [];
+      let nativeEvaluation = null;
+      let googleEvaluation = null;
 
       if (state.recognitionCache.fingerprint === fingerprint) {
         text = state.recognitionCache.text;
       } else {
-        const nativeCandidates = await recognizeWithNative();
-        text = selectDisplayCandidate(nativeCandidates, strokeStats);
+        nativeCandidates = await recognizeWithNative();
+        nativeEvaluation = evaluateDisplayCandidates(nativeCandidates, strokeStats);
+        text = nativeEvaluation.text;
 
         if (!text) {
-          text = selectDisplayCandidate(await recognizeWithGoogle(), strokeStats);
+          googleCandidates = await recognizeWithGoogle();
+          googleEvaluation = evaluateDisplayCandidates(googleCandidates, strokeStats);
+          text = googleEvaluation.text;
         }
+
+        state.lastCandidateEvaluation = {
+          fingerprint,
+          strokeStats,
+          native: nativeEvaluation,
+          google: googleEvaluation,
+          selectedText: text,
+        };
 
         if (text) {
           state.recognitionCache = { fingerprint, text };
@@ -10017,6 +10624,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       if (serial !== state.recognitionSerial || !hasMeaningfulInk()) {
         return;
       }
+
+      recordRecognitionAttempt({
+        fingerprint,
+        strokeStats,
+        nativeCandidates,
+        googleCandidates,
+        nativeEvaluation,
+        googleEvaluation,
+        selectedText: text,
+      });
 
       const decision = getStableCandidateDecision(text, strokeStats);
 
@@ -10769,7 +11386,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     traceContext.fillStyle = "rgba(244, 240, 223, 0.19)";
     traceContext.textAlign = "center";
     traceContext.textBaseline = "middle";
-    traceContext.font = `700 ${fontSize}px "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif`;
+    traceContext.font = `700 ${fontSize}px "UD Digi Kyokasho NP-R", "YuKyokasho", "Yu Kyokasho", "Hiragino Mincho ProN", "BIZ UDPMincho", serif`;
 
     answerChars.forEach((char, index) => {
       let row;
@@ -11253,6 +11870,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       .filter(Boolean);
 
     applySettings(initialSettings);
+    updateRecognitionDiagnosticsUi();
     startSession();
     state.nativeRecognizer = await createNativeRecognizer();
     updateActionButtons();
@@ -11450,6 +12068,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
     setSettingsOpen(false);
     startSession();
+  });
+
+  exportRecognitionDiagnosticsButton?.addEventListener("click", downloadRecognitionCorpus);
+  clearRecognitionDiagnosticsButton?.addEventListener("click", () => {
+    if (!window.confirm("端末内の認識診断記録を消去しますか？")) {
+      return;
+    }
+    clearRecognitionCorpus();
   });
 
   resultList.addEventListener("click", (event) => {
