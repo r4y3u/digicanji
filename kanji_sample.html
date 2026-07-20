@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.1.0" />
+    <meta name="application-version" content="1.2.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -295,6 +295,7 @@ button {
   border-radius: clamp(6px, 1vw, 10px);
   background: rgba(18, 34, 28, 0.22);
   color: var(--ink);
+  font-family: var(--educational-font);
   font-size: clamp(1.45rem, 8vmin, 4.4rem);
   font-weight: 850;
   line-height: 1;
@@ -1219,6 +1220,11 @@ input:focus-visible,
   font-size: 0.78rem;
   font-weight: 800;
   cursor: pointer;
+}
+
+.recognition-diagnostics-button:disabled {
+  cursor: default;
+  opacity: 0.45;
 }
 
 .recognition-diagnostics-count {
@@ -7590,11 +7596,15 @@ input:focus-visible,
 
         <div id="recognition-diagnostics-group" class="settings-group" hidden>
           <span class="settings-label">認識診断<span id="recognition-diagnostics-count" class="recognition-diagnostics-count"></span></span>
-          <p class="settings-note">実筆座標、候補列、画数判定、構造検査の結果を端末内に最大40件保存します。</p>
+          <p class="settings-note">実筆座標、候補列、画数判定、構造検査の結果を端末内に最大80件保存します。</p>
           <div class="recognition-diagnostics-actions">
             <button id="export-recognition-diagnostics-button" class="recognition-diagnostics-button" type="button">JSONを書き出す</button>
             <button id="clear-recognition-diagnostics-button" class="recognition-diagnostics-button" type="button">診断記録を消す</button>
+            <button id="import-recognition-corpus-button" class="recognition-diagnostics-button" type="button">JSONを読み込む</button>
+            <button id="replay-recognition-corpus-button" class="recognition-diagnostics-button" type="button" disabled>再評価する</button>
           </div>
+          <input id="recognition-corpus-file-input" type="file" accept="application/json,.json" hidden />
+          <p id="recognition-replay-status" class="settings-note" aria-live="polite"></p>
         </div>
 
         <div class="settings-group danger-zone">
@@ -7674,6 +7684,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const recognitionDiagnosticsCount = document.querySelector("#recognition-diagnostics-count");
   const exportRecognitionDiagnosticsButton = document.querySelector("#export-recognition-diagnostics-button");
   const clearRecognitionDiagnosticsButton = document.querySelector("#clear-recognition-diagnostics-button");
+  const importRecognitionCorpusButton = document.querySelector("#import-recognition-corpus-button");
+  const replayRecognitionCorpusButton = document.querySelector("#replay-recognition-corpus-button");
+  const recognitionCorpusFileInput = document.querySelector("#recognition-corpus-file-input");
+  const recognitionReplayStatus = document.querySelector("#recognition-replay-status");
   const resultList = document.querySelector("#result-list");
   const scoreSummary = document.querySelector("#score-summary");
   const retryButton = document.querySelector("#retry-button");
@@ -7747,7 +7761,23 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const COMBINING_DAKUTEN = "゙";
   const COMBINING_HANDAKUTEN = "゚";
   const SMALL_KANA_PATTERN = /^[ぁぃぅぇぉゃゅょっゎァィゥェォャュョッヮヵヶ]$/u;
-  const MAX_RECOGNITION_CORPUS_RECORDS = 40;
+  const MAX_RECOGNITION_CORPUS_RECORDS = 80;
+  const RECOGNITION_SOURCE_RANK_WEIGHT = 0.18;
+  const RECOGNITION_CROSS_ENGINE_BONUS = 1.35;
+  const RECOGNITION_MULTI_VARIANT_BONUS = 0.18;
+  const RECOGNITION_NORMALIZED_VARIANT_PENALTY = 0.28;
+  const UNKNOWN_HAN_STROKE_PENALTY = 0.12;
+  const DECISIVE_SCORE_CHARACTER = 1.65;
+  const DECISIVE_SCORE_FREE = 3.4;
+  const DECISIVE_MARGIN = 0.85;
+  const GOOGLE_NORMALIZATION_PADDING_RATIO = 0.08;
+  const EDUCATIONAL_FONT_CANDIDATES = Object.freeze([
+    "UD Digi Kyokasho NP-R",
+    "YuKyokasho",
+    "Yu Kyokasho",
+    "Hiragino Mincho ProN",
+    "BIZ UDPMincho",
+  ]);
   const RECOGNITION_DEBUG_QUERY = new URLSearchParams(window.location.search).get("recognitionDebug");
   const RECOGNITION_DIAGNOSTICS_ENABLED = RECOGNITION_DEBUG_QUERY === "1" || RECOGNITION_DEBUG_QUERY === "true";
 
@@ -7966,6 +7996,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     recognitionCache: { fingerprint: "", text: "" },
     googleAbortController: null,
     recognitionCorpus: loadRecognitionCorpus(),
+    importedRecognitionCorpus: [],
+    lastRecognitionReplayReport: null,
+    recognitionModeOverride: "",
+    isRecognitionReplay: false,
     lastLoggedRecognitionFingerprint: "",
     lastCandidateEvaluation: null,
     candidateStability: {
@@ -8017,11 +8051,27 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   state.strokes = state.slots[0].strokes;
 
+  function katakanaToHiragana(text) {
+    return Array.from(String(text || "").normalize("NFKC"))
+      .map((char) => {
+        const code = char.codePointAt(0);
+        return code >= 0x30a1 && code <= 0x30f6
+          ? String.fromCodePoint(code - 0x60)
+          : char;
+      })
+      .join("");
+  }
+
   function isHiraganaOnlyText(text) {
-    return /^[ぁ-ゖゝゞ]+$/u.test(String(text || "").normalize("NFKC"));
+    return /^[\p{Script=Hiragana}ゝゞー]+$/u.test(
+      String(text || "").normalize("NFKC"),
+    );
   }
 
   function isFreeMode() {
+    if (state.recognitionModeOverride) {
+      return state.recognitionModeOverride === "free";
+    }
     return state.session[state.currentQuestionIndex]?.inputMode === "free";
   }
 
@@ -8644,6 +8694,77 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
   }
 
+  function getStrokesBounds(strokes) {
+    const points = (Array.isArray(strokes) ? strokes : []).flat().filter(Boolean);
+    if (points.length === 0) {
+      return null;
+    }
+
+    const bounds = points.reduce(
+      (result, point) => ({
+        left: Math.min(result.left, point.x),
+        right: Math.max(result.right, point.x),
+        top: Math.min(result.top, point.y),
+        bottom: Math.max(result.bottom, point.y),
+      }),
+      { left: Infinity, right: -Infinity, top: Infinity, bottom: -Infinity },
+    );
+
+    return {
+      ...bounds,
+      width: Math.max(1, bounds.right - bounds.left),
+      height: Math.max(1, bounds.bottom - bounds.top),
+    };
+  }
+
+  function normalizeStrokesToGuide(
+    strokes,
+    guide,
+    paddingRatio = GOOGLE_NORMALIZATION_PADDING_RATIO,
+  ) {
+    const bounds = getStrokesBounds(strokes);
+    if (!bounds) {
+      return [];
+    }
+
+    const width = Math.max(1, Number(guide?.width) || 1);
+    const height = Math.max(1, Number(guide?.height) || 1);
+    const paddingX = width * paddingRatio;
+    const paddingY = height * paddingRatio;
+    const availableWidth = Math.max(1, width - paddingX * 2);
+    const availableHeight = Math.max(1, height - paddingY * 2);
+    const scale = Math.min(availableWidth / bounds.width, availableHeight / bounds.height);
+    const scaledWidth = bounds.width * scale;
+    const scaledHeight = bounds.height * scale;
+    const offsetX = (width - scaledWidth) / 2 - bounds.left * scale;
+    const offsetY = (height - scaledHeight) / 2 - bounds.top * scale;
+
+    return strokes.map((stroke) => stroke.map((point) => ({
+      x: point.x * scale + offsetX,
+      y: point.y * scale + offsetY,
+      t: point.t || 0,
+    })));
+  }
+
+  function isNormalizedVariantUseful(strokes, guide) {
+    const bounds = getStrokesBounds(strokes);
+    if (!bounds) {
+      return false;
+    }
+
+    const width = Math.max(1, Number(guide?.width) || 1);
+    const height = Math.max(1, Number(guide?.height) || 1);
+    const coverage = Math.max(bounds.width / width, bounds.height / height);
+    const centerX = bounds.left + bounds.width / 2;
+    const centerY = bounds.top + bounds.height / 2;
+    const centerOffset = Math.hypot(
+      (centerX - width / 2) / width,
+      (centerY - height / 2) / height,
+    );
+
+    return coverage < 0.58 || coverage > 0.94 || centerOffset > 0.13;
+  }
+
   function buildGoogleInk(strokes = state.strokes) {
     return strokes
       .map(compressStrokeForRecognition)
@@ -8687,6 +8808,56 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     };
   }
 
+  function getExpectedRecognitionText(question) {
+    if (!question?.expectedAnswer) {
+      return "";
+    }
+    if (question.inputMode === "free") {
+      return question.expectedAnswer;
+    }
+    const chars = Array.from(question.expectedAnswer);
+    return chars[question.activeSlotIndex] || chars[0] || "";
+  }
+
+  function detectLocalFontAvailability(name) {
+    const context = document.createElement("canvas").getContext("2d");
+    if (!context) {
+      return null;
+    }
+    const sample = "漢字かなカナAaWmw019";
+    return ["monospace", "serif"].some((fallback) => {
+      context.font = `32px ${fallback}`;
+      const baseline = context.measureText(sample).width;
+      context.font = `32px "${name}", ${fallback}`;
+      const measured = context.measureText(sample).width;
+      return Math.abs(measured - baseline) > 0.2;
+    });
+  }
+
+  function getEducationalFontDiagnostics() {
+    const fontSet = document.fonts;
+    const availability = EDUCATIONAL_FONT_CANDIDATES.map((name) => {
+      let fontFaceSetCheck = null;
+      try {
+        fontFaceSetCheck = fontSet?.check ? fontSet.check(`16px "${name}"`) : null;
+      } catch {
+        fontFaceSetCheck = null;
+      }
+      const canvasDetected = detectLocalFontAvailability(name);
+      return {
+        name,
+        available: canvasDetected === true,
+        canvasDetected,
+        fontFaceSetCheck,
+      };
+    });
+    return {
+      cssStack: getComputedStyle(questionText).fontFamily,
+      availability,
+      firstAvailable: availability.find((item) => item.available)?.name || "system-fallback",
+    };
+  }
+
   function getSerializableInkBounds() {
     const bounds = getInkBounds();
     if (!bounds) {
@@ -8701,9 +8872,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     fingerprint,
     strokeStats,
     nativeCandidates,
-    googleCandidates,
+    googleRawCandidates,
+    googleNormalizedCandidates,
     nativeEvaluation,
-    googleEvaluation,
+    ensembleEvaluation,
+    recognitionPath,
     selectedText,
   }) {
     if (!RECOGNITION_DIAGNOSTICS_ENABLED || !fingerprint) {
@@ -8715,15 +8888,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.lastLoggedRecognitionFingerprint = fingerprint;
 
     const question = getRecognitionQuestionContext();
+    const expectedText = getExpectedRecognitionText(question);
     const record = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       appVersion: document.querySelector('meta[name="application-version"]')?.content || "",
       recordedAt: new Date().toISOString(),
       quizId,
       question,
+      expectedText,
       selectedMatchesExpected: Boolean(
-        selectedText && question?.expectedAnswer &&
-        normalizeComparableText(selectedText) === normalizeComparableText(question.expectedAnswer)
+        selectedText && expectedText &&
+        normalizeComparableText(selectedText) === normalizeComparableText(expectedText)
       ),
       layout: state.settings.layout,
       handedness: state.settings.handedness,
@@ -8734,18 +8909,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         devicePixelRatio: window.devicePixelRatio || 1,
       },
       userAgent: navigator.userAgent,
+      educationalFont: getEducationalFontDiagnostics(),
       fingerprint,
       strokeStats,
       inkBounds: getSerializableInkBounds(),
       ink: buildGoogleInk(state.strokes),
       candidates: {
         native: nativeCandidates,
-        google: googleCandidates,
+        googleRaw: googleRawCandidates,
+        googleNormalized: googleNormalizedCandidates,
       },
       evaluations: {
         native: nativeEvaluation,
-        google: googleEvaluation,
+        ensemble: ensembleEvaluation,
       },
+      recognitionPath,
       selectedText,
     };
 
@@ -8755,7 +8933,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function downloadRecognitionCorpus() {
     const payload = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       exportedAt: new Date().toISOString(),
       quizId,
       records: state.recognitionCorpus,
@@ -8777,6 +8955,191 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.lastLoggedRecognitionFingerprint = "";
     safeStorageRemove(STORAGE_KEYS.recognitionCorpus);
     updateRecognitionDiagnosticsUi();
+  }
+
+  function setRecognitionReplayStatus(message = "") {
+    if (recognitionReplayStatus) {
+      recognitionReplayStatus.textContent = message;
+    }
+  }
+
+  function extractRecognitionCorpusRecords(payload) {
+    if (Array.isArray(payload)) {
+      return payload;
+    }
+    if (Array.isArray(payload?.records)) {
+      return payload.records;
+    }
+    return [];
+  }
+
+  function googleInkToStrokes(ink) {
+    return (Array.isArray(ink) ? ink : []).map((stroke) => {
+      const xs = Array.isArray(stroke?.[0]) ? stroke[0] : [];
+      const ys = Array.isArray(stroke?.[1]) ? stroke[1] : [];
+      const ts = Array.isArray(stroke?.[2]) ? stroke[2] : [];
+      const length = Math.min(xs.length, ys.length);
+      return Array.from({ length }, (_, index) => ({
+        x: Number(xs[index]) || 0,
+        y: Number(ys[index]) || 0,
+        t: Number(ts[index]) || index,
+      }));
+    }).filter((stroke) => stroke.length > 0);
+  }
+
+  function getReplaySourceGroups(record) {
+    const candidates = record?.candidates || {};
+    const groups = [];
+    if (Array.isArray(candidates.native) && candidates.native.length > 0) {
+      groups.push({ source: "native", variant: "raw", candidates: candidates.native });
+    }
+    const googleRaw = Array.isArray(candidates.googleRaw)
+      ? candidates.googleRaw
+      : Array.isArray(candidates.google)
+        ? candidates.google
+        : [];
+    if (googleRaw.length > 0) {
+      groups.push({ source: "google", variant: "raw", candidates: googleRaw });
+    }
+    if (Array.isArray(candidates.googleNormalized) && candidates.googleNormalized.length > 0) {
+      groups.push({
+        source: "google",
+        variant: "normalized",
+        penalty: RECOGNITION_NORMALIZED_VARIANT_PENALTY,
+        candidates: candidates.googleNormalized,
+      });
+    }
+    return groups;
+  }
+
+  function getReplayExpectedText(record) {
+    if (record?.expectedText) {
+      return record.expectedText;
+    }
+    return getExpectedRecognitionText(record?.question || null);
+  }
+
+  function replayRecognitionCorpus(payload) {
+    const records = extractRecognitionCorpusRecords(payload);
+    const previousStrokes = state.strokes;
+    const previousModeOverride = state.recognitionModeOverride;
+    const previousReplayState = state.isRecognitionReplay;
+    const results = [];
+
+    try {
+      state.isRecognitionReplay = true;
+      records.forEach((record, index) => {
+        state.strokes = googleInkToStrokes(record?.ink);
+        state.recognitionModeOverride = record?.question?.inputMode === "free"
+          ? "free"
+          : "character";
+        const sourceGroups = getReplaySourceGroups(record);
+        const strokeStats = record?.strokeStats &&
+          Number.isFinite(record.strokeStats.rawCount) &&
+          Number.isFinite(record.strokeStats.virtualCount)
+          ? record.strokeStats
+          : estimateInputStrokeStats();
+        const evaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
+        const expectedText = getReplayExpectedText(record);
+        const normalizedExpected = normalizeComparableText(expectedText);
+        const replaySelected = evaluation.text;
+        const expectedEvaluation = evaluation.evaluations.find((item) =>
+          normalizeComparableText(item.text) === normalizedExpected
+        );
+
+        results.push({
+          index,
+          recordedAt: record?.recordedAt || "",
+          question: record?.question || null,
+          expectedText,
+          originalSelected: record?.selectedText || "",
+          replaySelected,
+          changedSelection: (record?.selectedText || "") !== replaySelected,
+          matchesExpected: Boolean(
+            normalizedExpected &&
+            normalizeComparableText(replaySelected) === normalizedExpected
+          ),
+          expectedWasCandidate: Boolean(expectedEvaluation),
+          expectedCandidatePassed: Boolean(expectedEvaluation?.pass),
+          expectedCandidateReasons: expectedEvaluation?.reasons || [],
+          recognitionPath: record?.recognitionPath || "legacy",
+          evaluation,
+        });
+      });
+    } finally {
+      state.strokes = previousStrokes;
+      state.recognitionModeOverride = previousModeOverride;
+      state.isRecognitionReplay = previousReplayState;
+    }
+
+    const expectedResults = results.filter((item) => item.expectedText);
+    const report = {
+      schemaVersion: 1,
+      appVersion: document.querySelector('meta[name="application-version"]')?.content || "",
+      replayedAt: new Date().toISOString(),
+      summary: {
+        total: results.length,
+        withExpectedAnswer: expectedResults.length,
+        correct: expectedResults.filter((item) => item.matchesExpected).length,
+        noCandidate: results.filter((item) => !item.replaySelected).length,
+        changedSelection: results.filter((item) => item.changedSelection).length,
+        expectedCandidateRejected: expectedResults.filter((item) =>
+          item.expectedWasCandidate && !item.expectedCandidatePassed
+        ).length,
+      },
+      results,
+    };
+    state.lastRecognitionReplayReport = report;
+    return report;
+  }
+
+  function downloadJsonFile(payload, filename) {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+
+  async function importRecognitionCorpusFile(file) {
+    if (!file) {
+      return;
+    }
+    try {
+      const payload = JSON.parse(await file.text());
+      const records = extractRecognitionCorpusRecords(payload);
+      if (records.length === 0) {
+        throw new Error("認識記録がありません");
+      }
+      state.importedRecognitionCorpus = records;
+      replayRecognitionCorpusButton.disabled = false;
+      setRecognitionReplayStatus(`${records.length}件を読み込みました。`);
+    } catch (error) {
+      state.importedRecognitionCorpus = [];
+      replayRecognitionCorpusButton.disabled = true;
+      setRecognitionReplayStatus(`読み込みに失敗しました：${error?.message || "形式を確認してください"}`);
+    } finally {
+      if (recognitionCorpusFileInput) {
+        recognitionCorpusFileInput.value = "";
+      }
+    }
+  }
+
+  function replayImportedRecognitionCorpus() {
+    if (state.importedRecognitionCorpus.length === 0) {
+      setRecognitionReplayStatus("先に診断JSONを読み込んでください。");
+      return;
+    }
+    const report = replayRecognitionCorpus({ records: state.importedRecognitionCorpus });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    downloadJsonFile(report, `digicanji-recognition-replay-${stamp}.json`);
+    setRecognitionReplayStatus(
+      `${report.summary.total}件を再評価：正答${report.summary.correct}/${report.summary.withExpectedAnswer}件、候補なし${report.summary.noCandidate}件。`,
+    );
   }
 
   function runRecognitionSelfTests() {
@@ -8805,6 +9168,111 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       { shi, ji },
     );
 
+    const previousMode = state.recognitionModeOverride;
+    const previousStrokes = state.strokes;
+    const previousReplay = state.isRecognitionReplay;
+    try {
+      state.recognitionModeOverride = "free";
+      add(
+        "katakana-candidates-normalize-to-hiragana",
+        normalizeCandidateText("キョウリョク") === "きょうりょく",
+        normalizeCandidateText("キョウリョク"),
+      );
+
+      state.recognitionModeOverride = "character";
+      state.isRecognitionReplay = true;
+      state.strokes = [[{ x: 10, y: 10, t: 0 }, { x: 90, y: 10, t: 100 }]];
+      add("cjk-extension-b-supported", isCjkIdeograph("𠮷"));
+      const unknownCompatibility = evaluateStrokeCompatibility(
+        "𠀀",
+        { rawCount: 6, virtualCount: 6 },
+      );
+      add(
+        "unknown-han-stroke-count-soft-accept",
+        unknownCompatibility.pass && unknownCompatibility.unknownStrokeCount,
+        unknownCompatibility,
+      );
+      const ambiguousUnknown = evaluateCandidateEnsemble(
+        [{ source: "native", variant: "raw", candidates: ["𠀀", "共"] }],
+        { rawCount: 6, virtualCount: 6 },
+      );
+      add(
+        "unknown-han-ambiguity-requests-second-engine",
+        ambiguousUnknown.text === "𠀀" && !isCandidateEvaluationDecisive(ambiguousUnknown),
+        { text: ambiguousUnknown.text, margin: ambiguousUnknown.margin },
+      );
+
+      const ensemble = evaluateCandidateEnsemble(
+        [
+          { source: "native", variant: "raw", candidates: ["乙", "一"] },
+          { source: "google", variant: "raw", candidates: ["一"] },
+        ],
+        { rawCount: 1, virtualCount: 1 },
+      );
+      add(
+        "cross-engine-consensus-ranking",
+        ensemble.text === "一" && ensemble.accepted[0]?.crossEngineConsensus,
+        { text: ensemble.text, accepted: ensemble.accepted.slice(0, 2) },
+      );
+
+      const variantAgreement = evaluateCandidateEnsemble(
+        [
+          { source: "native", variant: "raw", candidates: ["乙"] },
+          { source: "google", variant: "raw", candidates: ["一"] },
+          {
+            source: "google",
+            variant: "normalized",
+            penalty: RECOGNITION_NORMALIZED_VARIANT_PENALTY,
+            candidates: ["一"],
+          },
+        ],
+        { rawCount: 1, virtualCount: 1 },
+      );
+      add(
+        "normalized-variant-breaks-engine-tie",
+        variantAgreement.text === "一" && variantAgreement.accepted[0]?.variantCount === 2,
+        { text: variantAgreement.text, accepted: variantAgreement.accepted.slice(0, 2) },
+      );
+
+      const guide = { width: 300, height: 200 };
+      const normalized = normalizeStrokesToGuide(
+        [[{ x: 0, y: 0, t: 0 }, { x: 30, y: 20, t: 20 }]],
+        guide,
+      );
+      const normalizedBounds = getStrokesBounds(normalized);
+      add(
+        "normalized-ink-inside-guide",
+        Boolean(
+          normalizedBounds &&
+          normalizedBounds.left >= 0 &&
+          normalizedBounds.top >= 0 &&
+          normalizedBounds.right <= guide.width &&
+          normalizedBounds.bottom <= guide.height
+        ),
+        normalizedBounds,
+      );
+
+      const replay = replayRecognitionCorpus({
+        records: [{
+          question: { inputMode: "character", expectedAnswer: "一", activeSlotIndex: 0 },
+          expectedText: "一",
+          selectedText: "",
+          strokeStats: { rawCount: 1, virtualCount: 1 },
+          ink: [[[10, 90], [10, 10], [0, 100]]],
+          candidates: { native: ["一"] },
+        }],
+      });
+      add(
+        "corpus-replay-selects-expected-candidate",
+        replay.summary.correct === 1 && replay.summary.noCandidate === 0,
+        replay.summary,
+      );
+    } finally {
+      state.recognitionModeOverride = previousMode;
+      state.strokes = previousStrokes;
+      state.isRecognitionReplay = previousReplay;
+    }
+
     const ids = STRUCTURAL_COMPONENT_RULES.map((rule) => rule.id);
     add("structural-rule-ids-unique", new Set(ids).size === ids.length, ids);
     add("educational-kana-vector-exceptions-removed", Object.keys(EDUCATIONAL_KANA_PATHS).length === 0);
@@ -8822,6 +9290,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       : JSON.parse(JSON.stringify(state.recognitionCorpus)),
     export: downloadRecognitionCorpus,
     clear: clearRecognitionCorpus,
+    replay: replayRecognitionCorpus,
+    getLastReplayReport: () => state.lastRecognitionReplayReport,
+    getEducationalFontDiagnostics,
     runSelfTests: runRecognitionSelfTests,
   });
 
@@ -8869,7 +9340,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return normalizeCandidates(candidates);
   }
 
-  async function recognizeWithGoogle() {
+  async function recognizeWithGoogle(strokes = state.strokes) {
     const guide = getCanvasGuide();
     const payload = {
       device: navigator.userAgent,
@@ -8880,7 +9351,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
             writing_area_width: guide.width,
             writing_area_height: guide.height,
           },
-          ink: buildGoogleInk(),
+          ink: buildGoogleInk(strokes),
           language: "ja",
         },
       ],
@@ -8924,16 +9395,27 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return [];
   }
 
+  function normalizeCandidateText(candidate) {
+    let text = String(candidate || "").normalize("NFKC").trim();
+    if (!text) {
+      return "";
+    }
+
+    if (isFreeMode()) {
+      text = katakanaToHiragana(text);
+    } else if (getCharacterLength(text) === 1) {
+      text = EDUCATIONAL_GLYPH_NORMALIZATION[text] || text;
+    }
+
+    return text;
+  }
+
   function normalizeCandidates(candidates) {
     const seen = new Set();
     const normalized = [];
 
     for (const candidate of candidates) {
-      const rawText = String(candidate || "").trim();
-      const text = !isFreeMode() && getCharacterLength(rawText) === 1
-        ? EDUCATIONAL_GLYPH_NORMALIZATION[rawText] || rawText
-        : rawText;
-
+      const text = normalizeCandidateText(candidate);
       if (!text || seen.has(text)) {
         continue;
       }
@@ -9028,7 +9510,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function isCjkIdeograph(char) {
-    return /^[\u3400-\u9fff]$/u.test(char);
+    return /^\p{Script=Han}$/u.test(String(char || ""));
   }
 
   function hasUnknownKanjiStrokeCount(text) {
@@ -9038,13 +9520,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function isKanaOnly(text) {
-    return /^[\u3040-\u30ffー]+$/u.test(text);
+    return /^[\p{Script=Hiragana}\p{Script=Katakana}ー]+$/u.test(String(text || ""));
   }
 
   function isJapaneseCandidate(text) {
+    const value = String(text || "");
     return (
-      /[\u3040-\u30ff\u3400-\u9fff]/u.test(text) &&
-      /^[\u3040-\u30ff\u3400-\u9fff々〆〤ヶヵー]+$/u.test(text)
+      /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(value) &&
+      /^[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}々〆〤ヶヵー]+$/u.test(value)
     );
   }
 
@@ -9265,7 +9748,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function isFreeCandidateProgressPlausible(text, strokeStats) {
-    if (!isFreeMode()) {
+    if (state.isRecognitionReplay || !isFreeMode()) {
       return true;
     }
 
@@ -9955,14 +10438,28 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const result = {
       pass: true,
       reasons: [],
+      warnings: [],
       expectedRange,
       scorePenalty: 0,
+      unknownStrokeCount: false,
       structure: evaluateRequiredCandidateStructure(text),
     };
 
     if (!expectedRange) {
-      result.pass = isFreeMode();
-      if (!result.pass) {
+      const isSingleHan = !isFreeMode() &&
+        getCharacterLength(text) === 1 &&
+        isCjkIdeograph(text);
+      result.pass = Boolean(
+        isSingleHan &&
+        strokeStats.rawCount >= 1 &&
+        strokeStats.virtualCount >= 1 &&
+        result.structure.pass
+      );
+      result.unknownStrokeCount = isSingleHan;
+      if (result.pass) {
+        result.warnings.push("unknown-stroke-count");
+        result.scorePenalty += UNKNOWN_HAN_STROKE_PENALTY;
+      } else {
         result.reasons.push("unknown-stroke-count");
       }
       return result;
@@ -10233,7 +10730,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const expectedRange = getCandidateStrokeCountRange(text);
 
     if (!expectedRange) {
-      return 1000 + originalIndex * 0.01;
+      return originalIndex * 0.12;
     }
 
     const nearestVirtual = Math.min(
@@ -10256,11 +10753,59 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     );
   }
 
-  function evaluateDisplayCandidates(candidates, strokeStats = estimateInputStrokeStats()) {
-    const normalized = normalizeCandidates(candidates);
-    const structurallyExpanded = expandStructuralAlternatives(normalized, strokeStats);
+  function normalizeCandidateSourceGroups(sourceGroups) {
+    return (Array.isArray(sourceGroups) ? sourceGroups : [])
+      .map((group, groupIndex) => ({
+        source: String(group?.source || `source-${groupIndex}`),
+        variant: String(group?.variant || "raw"),
+        penalty: Number.isFinite(group?.penalty) ? group.penalty : 0,
+        candidates: normalizeCandidates(group?.candidates || []),
+      }))
+      .filter((group) => group.candidates.length > 0);
+  }
+
+  function buildCandidateEvidence(sourceGroups, strokeStats) {
+    const evidence = new Map();
+
+    function add(text, membership) {
+      if (!evidence.has(text)) {
+        evidence.set(text, []);
+      }
+      evidence.get(text).push(membership);
+    }
+
+    normalizeCandidateSourceGroups(sourceGroups).forEach((group) => {
+      group.candidates.forEach((candidate, rank) => {
+        STRUCTURAL_ALTERNATIVE_RULES.forEach((rule) => {
+          if (candidate === rule.source && canUseStructuralAlternative(rule, strokeStats)) {
+            add(rule.target, {
+              source: group.source,
+              variant: group.variant,
+              rank,
+              penalty: group.penalty + 0.22,
+              alternativeOf: candidate,
+            });
+          }
+        });
+
+        add(candidate, {
+          source: group.source,
+          variant: group.variant,
+          rank,
+          penalty: group.penalty,
+          alternativeOf: "",
+        });
+      });
+    });
+
+    return evidence;
+  }
+
+  function evaluateCandidateEnsemble(sourceGroups, strokeStats = estimateInputStrokeStats()) {
+    const normalizedGroups = normalizeCandidateSourceGroups(sourceGroups);
+    const evidence = buildCandidateEvidence(normalizedGroups, strokeStats);
     const spatialProfile = getFreeInkSpatialProfile();
-    const evaluations = structurallyExpanded.map((text, index) => {
+    const evaluations = Array.from(evidence.entries()).map(([text, memberships], index) => {
       const reasons = [];
       if (!isJapaneseCandidate(text)) {
         reasons.push("not-japanese-candidate");
@@ -10271,8 +10816,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
       const compatibility = reasons.length === 0
         ? evaluateStrokeCompatibility(text, strokeStats)
-        : { pass: false, reasons: [], scorePenalty: 0, expectedRange: null, structure: null };
+        : {
+            pass: false,
+            reasons: [],
+            warnings: [],
+            scorePenalty: 0,
+            expectedRange: null,
+            structure: null,
+            unknownStrokeCount: false,
+          };
       reasons.push(...compatibility.reasons);
+
       const spatial = reasons.length === 0
         ? getCandidateSpatialFit(text, spatialProfile)
         : { penalty: 0, hardReject: false };
@@ -10280,34 +10834,75 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         reasons.push("spatial-support-insufficient");
       }
 
+      const engines = new Set(memberships.map((item) => item.source));
+      const variants = new Set(memberships.map((item) => `${item.source}:${item.variant}`));
+      const crossEngineConsensus = engines.has("native") && engines.has("google");
+      const bestSourceRank = Math.min(...memberships.map((item) => item.rank));
+      const sourceRankPenalty = Math.min(
+        ...memberships.map((item) =>
+          item.rank * RECOGNITION_SOURCE_RANK_WEIGHT + item.penalty
+        ),
+      );
+      const consensusBonus = crossEngineConsensus
+        ? RECOGNITION_CROSS_ENGINE_BONUS
+        : variants.size >= 2
+          ? RECOGNITION_MULTI_VARIANT_BONUS
+          : 0;
+
+      if (
+        compatibility.unknownStrokeCount &&
+        !crossEngineConsensus &&
+        bestSourceRank > 2
+      ) {
+        reasons.push("unknown-stroke-count-low-confidence");
+      }
+
       const pass = reasons.length === 0;
       const score = pass
-        ? getCandidateStrokeRank(text, strokeStats, index) +
+        ? getCandidateStrokeRank(text, strokeStats, 0) +
           compatibility.scorePenalty +
-          spatial.penalty
+          spatial.penalty +
+          sourceRankPenalty -
+          consensusBonus
         : Number.POSITIVE_INFINITY;
 
       return {
         text,
         sourceIndex: index,
+        bestSourceRank,
         pass,
         score: Number.isFinite(score) ? Math.round(score * 1000) / 1000 : null,
         reasons,
+        warnings: compatibility.warnings || [],
         expectedRange: compatibility.expectedRange,
         structure: compatibility.structure,
+        unknownStrokeCount: Boolean(compatibility.unknownStrokeCount),
         spatial,
+        memberships,
+        crossEngineConsensus,
+        variantCount: variants.size,
       };
     });
 
     const accepted = evaluations
       .filter((evaluation) => evaluation.pass)
-      .sort((a, b) => a.score - b.score || a.sourceIndex - b.sourceIndex);
+      .sort((a, b) =>
+        a.score - b.score ||
+        a.bestSourceRank - b.bestSourceRank ||
+        a.sourceIndex - b.sourceIndex
+      );
+    const topScore = accepted[0]?.score;
+    const secondScore = accepted[1]?.score;
+    const margin = Number.isFinite(topScore) && Number.isFinite(secondScore)
+      ? Math.round((secondScore - topScore) * 1000) / 1000
+      : null;
 
     return {
       text: accepted[0]?.text || "",
       evaluations,
-      normalized,
-      expanded: structurallyExpanded,
+      accepted,
+      margin,
+      sourceGroups: normalizedGroups,
       spatialProfile: spatialProfile
         ? {
             horizontal: spatialProfile.horizontal,
@@ -10316,6 +10911,38 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           }
         : null,
     };
+  }
+
+  function isCandidateEvaluationDecisive(evaluation) {
+    const top = evaluation?.accepted?.[0];
+    if (!top) {
+      return false;
+    }
+
+    if (top.unknownStrokeCount) {
+      return (
+        top.crossEngineConsensus ||
+        (
+          top.bestSourceRank === 0 &&
+          (evaluation.accepted.length === 1 || evaluation.margin >= DECISIVE_MARGIN)
+        )
+      );
+    }
+
+    const scoreLimit = isFreeMode()
+      ? DECISIVE_SCORE_FREE
+      : DECISIVE_SCORE_CHARACTER;
+    return (
+      top.score <= scoreLimit &&
+      (evaluation.accepted.length === 1 || evaluation.margin >= DECISIVE_MARGIN)
+    );
+  }
+
+  function evaluateDisplayCandidates(candidates, strokeStats = estimateInputStrokeStats()) {
+    return evaluateCandidateEnsemble(
+      [{ source: "legacy", variant: "raw", candidates }],
+      strokeStats,
+    );
   }
 
   function selectDisplayCandidate(candidates, strokeStats = estimateInputStrokeStats()) {
@@ -10591,28 +11218,75 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const fingerprint = `${isFreeMode() ? "free" : "character"}:${getStrokesFingerprint(state.strokes)}`;
       let text = "";
       let nativeCandidates = [];
-      let googleCandidates = [];
+      let googleRawCandidates = [];
+      let googleNormalizedCandidates = [];
       let nativeEvaluation = null;
-      let googleEvaluation = null;
+      let ensembleEvaluation = null;
+      let recognitionPath = "cache";
+      const sourceGroups = [];
 
       if (state.recognitionCache.fingerprint === fingerprint) {
         text = state.recognitionCache.text;
       } else {
+        recognitionPath = "native";
         nativeCandidates = await recognizeWithNative();
-        nativeEvaluation = evaluateDisplayCandidates(nativeCandidates, strokeStats);
-        text = nativeEvaluation.text;
+        if (nativeCandidates.length > 0) {
+          sourceGroups.push({
+            source: "native",
+            variant: "raw",
+            candidates: nativeCandidates,
+          });
+        }
+        nativeEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
+        ensembleEvaluation = nativeEvaluation;
 
-        if (!text) {
-          googleCandidates = await recognizeWithGoogle();
-          googleEvaluation = evaluateDisplayCandidates(googleCandidates, strokeStats);
-          text = googleEvaluation.text;
+        const shouldConsultGoogle =
+          isFreeMode() ||
+          !isCandidateEvaluationDecisive(nativeEvaluation);
+
+        if (shouldConsultGoogle) {
+          recognitionPath = nativeCandidates.length > 0
+            ? "native+google-raw"
+            : "google-raw";
+          googleRawCandidates = await recognizeWithGoogle(state.strokes);
+          if (googleRawCandidates.length > 0) {
+            sourceGroups.push({
+              source: "google",
+              variant: "raw",
+              candidates: googleRawCandidates,
+            });
+          }
+          ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
         }
 
+        const guide = getCanvasGuide();
+        const shouldTryNormalizedGoogle =
+          !ensembleEvaluation?.text ||
+          !isCandidateEvaluationDecisive(ensembleEvaluation);
+
+        if (shouldTryNormalizedGoogle) {
+          recognitionPath += "+google-normalized";
+          const normalizedStrokes = normalizeStrokesToGuide(state.strokes, guide);
+          googleNormalizedCandidates = await recognizeWithGoogle(normalizedStrokes);
+          if (googleNormalizedCandidates.length > 0) {
+            sourceGroups.push({
+              source: "google",
+              variant: "normalized",
+              penalty: RECOGNITION_NORMALIZED_VARIANT_PENALTY,
+              candidates: googleNormalizedCandidates,
+            });
+          }
+          ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
+        }
+
+        text = ensembleEvaluation?.text || "";
         state.lastCandidateEvaluation = {
           fingerprint,
           strokeStats,
           native: nativeEvaluation,
-          google: googleEvaluation,
+          ensemble: ensembleEvaluation,
+          sourceGroups,
+          recognitionPath,
           selectedText: text,
         };
 
@@ -10629,9 +11303,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         fingerprint,
         strokeStats,
         nativeCandidates,
-        googleCandidates,
+        googleRawCandidates,
+        googleNormalizedCandidates,
         nativeEvaluation,
-        googleEvaluation,
+        ensembleEvaluation,
+        recognitionPath,
         selectedText: text,
       });
 
@@ -10664,6 +11340,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       }
     }
   }
+
 
   function resetNativeDrawing() {
     if (state.nativeDrawing) {
@@ -11566,7 +12243,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
   }
 
-  async function recognizeTraceWithGoogle() {
+  async function recognizeTraceWithGoogle(strokes = state.trace.strokes) {
     const guide = getTraceCanvasSize();
     const payload = {
       device: navigator.userAgent,
@@ -11577,7 +12254,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
             writing_area_width: Math.max(1, Math.round(guide.width)),
             writing_area_height: Math.max(1, Math.round(guide.height)),
           },
-          ink: buildGoogleInk(state.trace.strokes),
+          ink: buildGoogleInk(strokes),
           language: "ja",
         },
       ],
@@ -11619,9 +12296,28 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return [];
   }
 
+  function normalizeTraceCandidates(candidates) {
+    const answerIsHiragana = isHiraganaOnlyText(state.trace.answer);
+    const seen = new Set();
+    const normalized = [];
+    (Array.isArray(candidates) ? candidates : []).forEach((candidate) => {
+      let text = String(candidate || "").normalize("NFKC").trim();
+      if (answerIsHiragana) {
+        text = katakanaToHiragana(text);
+      } else if (getCharacterLength(text) === 1) {
+        text = EDUCATIONAL_GLYPH_NORMALIZATION[text] || text;
+      }
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        normalized.push(text);
+      }
+    });
+    return normalized;
+  }
+
   function selectTraceCandidate(candidates) {
     const target = normalizeComparableText(state.trace.answer);
-    const usable = normalizeCandidates(candidates)
+    const usable = normalizeTraceCandidates(candidates)
       .filter(isJapaneseCandidate)
       .map((text, index) => ({
         text,
@@ -11638,6 +12334,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return aDistance - bDistance || a.index - b.index;
     });
     return usable[0]?.text || "";
+  }
+
+  function traceCandidatesContainTarget(candidates) {
+    const target = normalizeComparableText(state.trace.answer);
+    return normalizeTraceCandidates(candidates).some((text) =>
+      normalizeComparableText(text) === target
+    );
   }
 
   function scheduleTraceRecognition(delay = TRACE_RECOGNITION_DELAY_MS) {
@@ -11671,10 +12374,22 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       if (state.trace.recognitionCache.fingerprint === fingerprint) {
         text = state.trace.recognitionCache.text;
       } else {
-        text = selectTraceCandidate(await recognizeTraceWithNative());
-        if (!text) {
-          text = selectTraceCandidate(await recognizeTraceWithGoogle());
+        const nativeCandidates = await recognizeTraceWithNative();
+        const combinedCandidates = [...nativeCandidates];
+
+        if (!traceCandidatesContainTarget(combinedCandidates)) {
+          const googleRawCandidates = await recognizeTraceWithGoogle(state.trace.strokes);
+          combinedCandidates.push(...googleRawCandidates);
         }
+
+        if (!traceCandidatesContainTarget(combinedCandidates)) {
+          const guide = getTraceCanvasSize();
+          const normalizedStrokes = normalizeStrokesToGuide(state.trace.strokes, guide);
+          const googleNormalizedCandidates = await recognizeTraceWithGoogle(normalizedStrokes);
+          combinedCandidates.push(...googleNormalizedCandidates);
+        }
+
+        text = selectTraceCandidate(combinedCandidates);
         if (text) {
           state.trace.recognitionCache = { fingerprint, text };
         }
@@ -12077,6 +12792,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
     clearRecognitionCorpus();
   });
+  importRecognitionCorpusButton?.addEventListener("click", () => {
+    recognitionCorpusFileInput?.click();
+  });
+  recognitionCorpusFileInput?.addEventListener("change", () => {
+    importRecognitionCorpusFile(recognitionCorpusFileInput.files?.[0]);
+  });
+  replayRecognitionCorpusButton?.addEventListener("click", replayImportedRecognitionCorpus);
 
   resultList.addEventListener("click", (event) => {
     const row = event.target.closest(".result-row");
