@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.2.0" />
+    <meta name="application-version" content="1.3.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -7766,6 +7766,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const RECOGNITION_CROSS_ENGINE_BONUS = 1.35;
   const RECOGNITION_MULTI_VARIANT_BONUS = 0.18;
   const RECOGNITION_NORMALIZED_VARIANT_PENALTY = 0.28;
+  const RECOGNITION_REPAIR_SPLIT_PENALTY = 0.68;
+  const RECOGNITION_REPAIR_MERGE_PENALTY = 0.72;
+  const RECOGNITION_REPAIR_TAP_PENALTY = 0.96;
+  const MAX_RECOGNITION_REPAIR_VARIANTS = 2;
   const UNKNOWN_HAN_STROKE_PENALTY = 0.12;
   const DECISIVE_SCORE_CHARACTER = 1.65;
   const DECISIVE_SCORE_FREE = 3.4;
@@ -8776,6 +8780,314 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       ]);
   }
 
+  function cloneRecognitionStrokes(strokes) {
+    return (Array.isArray(strokes) ? strokes : []).map((stroke) =>
+      (Array.isArray(stroke) ? stroke : []).map((point) => ({
+        x: Number(point?.x) || 0,
+        y: Number(point?.y) || 0,
+        t: Number(point?.t) || 0,
+      })),
+    );
+  }
+
+  function getStrokePointSpan(stroke) {
+    const bounds = getStrokesBounds([stroke]);
+    return bounds ? Math.max(bounds.width, bounds.height) : 0;
+  }
+
+  function getStrokeDirectionNearEndpoint(stroke, fromStart, travelDistance) {
+    if (!Array.isArray(stroke) || stroke.length < 2) {
+      return null;
+    }
+
+    if (fromStart) {
+      const origin = stroke[0];
+      for (let index = 1; index < stroke.length; index += 1) {
+        const point = stroke[index];
+        if (getDistance(origin, point) >= travelDistance || index === stroke.length - 1) {
+          return { x: point.x - origin.x, y: point.y - origin.y };
+        }
+      }
+      return null;
+    }
+
+    const origin = stroke[stroke.length - 1];
+    for (let index = stroke.length - 2; index >= 0; index -= 1) {
+      const point = stroke[index];
+      if (getDistance(origin, point) >= travelDistance || index === 0) {
+        return { x: origin.x - point.x, y: origin.y - point.y };
+      }
+    }
+    return null;
+  }
+
+  function getVectorAngle(vectorA, vectorB) {
+    if (!vectorA || !vectorB) {
+      return Math.PI;
+    }
+    const lengthA = Math.hypot(vectorA.x, vectorA.y);
+    const lengthB = Math.hypot(vectorB.x, vectorB.y);
+    if (lengthA < 0.001 || lengthB < 0.001) {
+      return Math.PI;
+    }
+    const ratio = Math.max(-1, Math.min(1,
+      (vectorA.x * vectorB.x + vectorA.y * vectorB.y) / (lengthA * lengthB)
+    ));
+    return Math.acos(ratio);
+  }
+
+  function getStrokePrefixLengths(stroke) {
+    const prefix = [0];
+    for (let index = 1; index < stroke.length; index += 1) {
+      prefix.push(prefix[index - 1] + getDistance(stroke[index - 1], stroke[index]));
+    }
+    return prefix;
+  }
+
+  function findCredibleStrokeSplitIndexes(stroke, guide) {
+    const points = compressStrokeForRecognition(stroke);
+    if (points.length < 5) {
+      return [];
+    }
+
+    const diagonal = Math.hypot(Number(guide?.width) || 1, Number(guide?.height) || 1);
+    const directionWindow = Math.max(9, diagonal * 0.018);
+    const minLegLength = Math.max(18, diagonal * 0.034);
+    const prefix = getStrokePrefixLengths(points);
+    const totalLength = prefix[prefix.length - 1];
+    const candidates = [];
+
+    for (let index = 2; index < points.length - 2; index += 1) {
+      const current = points[index];
+      let beforeIndex = index - 1;
+      while (
+        beforeIndex > 0 &&
+        getDistance(points[beforeIndex], current) < directionWindow
+      ) {
+        beforeIndex -= 1;
+      }
+      let afterIndex = index + 1;
+      while (
+        afterIndex < points.length - 1 &&
+        getDistance(points[afterIndex], current) < directionWindow
+      ) {
+        afterIndex += 1;
+      }
+
+      const before = points[beforeIndex];
+      const after = points[afterIndex];
+      const incoming = { x: current.x - before.x, y: current.y - before.y };
+      const outgoing = { x: after.x - current.x, y: after.y - current.y };
+      const turn = getVectorAngle(incoming, outgoing);
+      const lengthBefore = prefix[index];
+      const lengthAfter = totalLength - prefix[index];
+
+      if (
+        turn >= Math.PI * 0.34 &&
+        turn <= Math.PI * 0.82 &&
+        lengthBefore >= minLegLength &&
+        lengthAfter >= minLegLength
+      ) {
+        candidates.push({ index, turn, lengthBefore, lengthAfter });
+      }
+    }
+
+    const selected = [];
+    candidates
+      .sort((a, b) => b.turn - a.turn)
+      .forEach((candidate) => {
+        if (selected.length >= 2) {
+          return;
+        }
+        const separated = selected.every((item) =>
+          Math.abs(prefix[item.index] - prefix[candidate.index]) >= minLegLength
+        );
+        if (separated) {
+          selected.push(candidate);
+        }
+      });
+
+    return selected.map((item) => item.index).sort((a, b) => a - b);
+  }
+
+  function splitStrokesAtCredibleCorners(strokes, guide) {
+    const output = [];
+    let splitCount = 0;
+
+    (Array.isArray(strokes) ? strokes : []).forEach((stroke) => {
+      const points = compressStrokeForRecognition(stroke);
+      const splitIndexes = findCredibleStrokeSplitIndexes(points, guide);
+      if (splitIndexes.length === 0) {
+        output.push(cloneRecognitionStrokes([stroke])[0]);
+        return;
+      }
+
+      let startIndex = 0;
+      splitIndexes.forEach((splitIndex) => {
+        const section = points.slice(startIndex, splitIndex + 1);
+        if (section.length >= 2) {
+          output.push(cloneRecognitionStrokes([section])[0]);
+        }
+        startIndex = splitIndex;
+        splitCount += 1;
+      });
+      const finalSection = points.slice(startIndex);
+      if (finalSection.length >= 2) {
+        output.push(cloneRecognitionStrokes([finalSection])[0]);
+      }
+    });
+
+    return splitCount > 0 ? { strokes: output, splitCount } : null;
+  }
+
+  function mergeCrediblyContinuousStrokes(strokes, guide) {
+    const source = cloneRecognitionStrokes(strokes);
+    if (source.length < 2) {
+      return null;
+    }
+
+    const diagonal = Math.hypot(Number(guide?.width) || 1, Number(guide?.height) || 1);
+    const maxGap = Math.max(10, diagonal * 0.028);
+    const directionTravel = Math.max(8, diagonal * 0.016);
+    const maxDirectionChange = Math.PI * 0.22;
+    const output = [];
+    let mergeCount = 0;
+
+    for (let index = 0; index < source.length; index += 1) {
+      const current = source[index];
+      const next = source[index + 1];
+      if (!next || current.length < 2 || next.length < 2 || mergeCount >= 2) {
+        output.push(current);
+        continue;
+      }
+
+      const currentEnd = current[current.length - 1];
+      const nextStart = next[0];
+      const gap = getDistance(currentEnd, nextStart);
+      const tailDirection = getStrokeDirectionNearEndpoint(current, false, directionTravel);
+      const headDirection = getStrokeDirectionNearEndpoint(next, true, directionTravel);
+      const directionChange = getVectorAngle(tailDirection, headDirection);
+      const currentLength = getStrokeLength(current);
+      const nextLength = getStrokeLength(next);
+
+      if (
+        gap <= maxGap &&
+        directionChange <= maxDirectionChange &&
+        currentLength >= directionTravel &&
+        nextLength >= directionTravel
+      ) {
+        const bridgeTime = Math.max(
+          Number(currentEnd.t) || 0,
+          (Number(nextStart.t) || 0) - 1,
+        );
+        const merged = [
+          ...current,
+          { x: nextStart.x, y: nextStart.y, t: bridgeTime },
+          ...next.slice(1),
+        ];
+        output.push(merged);
+        mergeCount += 1;
+        index += 1;
+      } else {
+        output.push(current);
+      }
+    }
+
+    return mergeCount > 0 ? { strokes: output, mergeCount } : null;
+  }
+
+  function filterAccidentalTapStrokes(strokes, guide, freeMode) {
+    if (freeMode) {
+      return null;
+    }
+
+    const source = cloneRecognitionStrokes(strokes);
+    if (source.length < 2) {
+      return null;
+    }
+
+    const diagonal = Math.hypot(Number(guide?.width) || 1, Number(guide?.height) || 1);
+    const maxTapLength = Math.max(2.6, diagonal * 0.0045);
+    const removable = source
+      .map((stroke, index) => ({
+        index,
+        length: getStrokeLength(stroke),
+        span: getStrokePointSpan(stroke),
+      }))
+      .filter((item) => item.length <= maxTapLength && item.span <= maxTapLength)
+      .sort((a, b) => a.length - b.length);
+
+    if (removable.length !== 1) {
+      return null;
+    }
+
+    const removedIndex = removable[0].index;
+    return {
+      strokes: source.filter((_, index) => index !== removedIndex),
+      removedCount: 1,
+    };
+  }
+
+  function getStrokesFingerprintForVariant(strokes) {
+    return (Array.isArray(strokes) ? strokes : [])
+      .map((stroke) => {
+        const first = stroke?.[0] || { x: 0, y: 0 };
+        const last = stroke?.[stroke.length - 1] || first;
+        return [
+          stroke?.length || 0,
+          Math.round(first.x),
+          Math.round(first.y),
+          Math.round(last.x),
+          Math.round(last.y),
+        ].join(":");
+      })
+      .join("|");
+  }
+
+  function createRecognitionRepairVariants(strokes, guide, { freeMode = isFreeMode() } = {}) {
+    const variants = [];
+    const seen = new Set([getStrokesFingerprintForVariant(strokes)]);
+
+    function add(variant, result, penalty, transform) {
+      if (!result?.strokes || result.strokes.length === 0) {
+        return;
+      }
+      const fingerprint = getStrokesFingerprintForVariant(result.strokes);
+      if (!fingerprint || seen.has(fingerprint)) {
+        return;
+      }
+      seen.add(fingerprint);
+      variants.push({
+        variant,
+        strokes: result.strokes,
+        penalty,
+        transform: { type: transform, ...result, strokes: undefined },
+        strokeStats: estimateStrokeStats(result.strokes, guide),
+      });
+    }
+
+    add(
+      "repair-split",
+      splitStrokesAtCredibleCorners(strokes, guide),
+      RECOGNITION_REPAIR_SPLIT_PENALTY,
+      "split-credible-corners",
+    );
+    add(
+      "repair-merge",
+      mergeCrediblyContinuousStrokes(strokes, guide),
+      RECOGNITION_REPAIR_MERGE_PENALTY,
+      "merge-continuous-endpoints",
+    );
+    add(
+      "repair-tap-filter",
+      filterAccidentalTapStrokes(strokes, guide, freeMode),
+      RECOGNITION_REPAIR_TAP_PENALTY,
+      "remove-single-zero-length-tap",
+    );
+
+    return variants.slice(0, MAX_RECOGNITION_REPAIR_VARIANTS);
+  }
+
   function persistRecognitionCorpus() {
     const trimmed = state.recognitionCorpus.slice(-MAX_RECOGNITION_CORPUS_RECORDS);
     state.recognitionCorpus = trimmed;
@@ -8874,6 +9186,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     nativeCandidates,
     googleRawCandidates,
     googleNormalizedCandidates,
+    repairCandidateGroups,
     nativeEvaluation,
     ensembleEvaluation,
     recognitionPath,
@@ -8890,7 +9203,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const question = getRecognitionQuestionContext();
     const expectedText = getExpectedRecognitionText(question);
     const record = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       appVersion: document.querySelector('meta[name="application-version"]')?.content || "",
       recordedAt: new Date().toISOString(),
       quizId,
@@ -8918,6 +9231,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         native: nativeCandidates,
         googleRaw: googleRawCandidates,
         googleNormalized: googleNormalizedCandidates,
+        repairs: (repairCandidateGroups || []).map((group) => ({
+          variant: group.variant,
+          penalty: group.penalty,
+          strokeStats: group.strokeStats,
+          transform: group.transform,
+          candidates: group.candidates,
+        })),
       },
       evaluations: {
         native: nativeEvaluation,
@@ -8933,7 +9253,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function downloadRecognitionCorpus() {
     const payload = {
-      schemaVersion: 2,
+      schemaVersion: 3,
       exportedAt: new Date().toISOString(),
       quizId,
       records: state.recognitionCorpus,
@@ -9009,6 +9329,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         candidates: candidates.googleNormalized,
       });
     }
+    if (Array.isArray(candidates.repairs)) {
+      candidates.repairs.forEach((repair) => {
+        if (!Array.isArray(repair?.candidates) || repair.candidates.length === 0) {
+          return;
+        }
+        groups.push({
+          source: "google",
+          variant: String(repair.variant || "repair-legacy"),
+          penalty: Number.isFinite(repair.penalty) ? repair.penalty : RECOGNITION_REPAIR_SPLIT_PENALTY,
+          strokeStats: repair.strokeStats || null,
+          transform: repair.transform || null,
+          candidates: repair.candidates,
+        });
+      });
+    }
     return groups;
   }
 
@@ -9046,6 +9381,20 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         const expectedEvaluation = evaluation.evaluations.find((item) =>
           normalizeComparableText(item.text) === normalizedExpected
         );
+        const matchesExpected = Boolean(
+          normalizedExpected &&
+          normalizeComparableText(replaySelected) === normalizedExpected
+        );
+        const repairRescued = Boolean(
+          matchesExpected && expectedEvaluation?.repairRequired
+        );
+        const failureClass = matchesExpected
+          ? repairRescued ? "repair-rescued" : "correct"
+          : !expectedEvaluation
+            ? "missing-from-candidates"
+            : !expectedEvaluation.pass
+              ? "expected-candidate-rejected"
+              : "ranking-error";
 
         results.push({
           index,
@@ -9055,10 +9404,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           originalSelected: record?.selectedText || "",
           replaySelected,
           changedSelection: (record?.selectedText || "") !== replaySelected,
-          matchesExpected: Boolean(
-            normalizedExpected &&
-            normalizeComparableText(replaySelected) === normalizedExpected
-          ),
+          matchesExpected,
+          failureClass,
+          repairRescued,
           expectedWasCandidate: Boolean(expectedEvaluation),
           expectedCandidatePassed: Boolean(expectedEvaluation?.pass),
           expectedCandidateReasons: expectedEvaluation?.reasons || [],
@@ -9084,8 +9432,15 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         noCandidate: results.filter((item) => !item.replaySelected).length,
         changedSelection: results.filter((item) => item.changedSelection).length,
         expectedCandidateRejected: expectedResults.filter((item) =>
-          item.expectedWasCandidate && !item.expectedCandidatePassed
+          item.failureClass === "expected-candidate-rejected"
         ).length,
+        missingFromCandidates: expectedResults.filter((item) =>
+          item.failureClass === "missing-from-candidates"
+        ).length,
+        rankingError: expectedResults.filter((item) =>
+          item.failureClass === "ranking-error"
+        ).length,
+        repairRescued: expectedResults.filter((item) => item.repairRescued).length,
       },
       results,
     };
@@ -9250,6 +9605,123 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           normalizedBounds.bottom <= guide.height
         ),
         normalizedBounds,
+      );
+
+      const repairGuide = { width: 200, height: 200 };
+      const splitResult = splitStrokesAtCredibleCorners([
+        [
+          { x: 20, y: 30, t: 0 },
+          { x: 70, y: 30, t: 10 },
+          { x: 120, y: 30, t: 20 },
+          { x: 120, y: 80, t: 30 },
+          { x: 120, y: 140, t: 40 },
+        ],
+      ], repairGuide);
+      add(
+        "repair-splits-credible-right-angle",
+        splitResult?.strokes?.length === 2 && splitResult.splitCount === 1,
+        splitResult,
+      );
+
+      const smoothCurve = splitStrokesAtCredibleCorners([
+        [
+          { x: 20, y: 100, t: 0 },
+          { x: 45, y: 80, t: 10 },
+          { x: 75, y: 65, t: 20 },
+          { x: 110, y: 60, t: 30 },
+          { x: 145, y: 65, t: 40 },
+          { x: 175, y: 80, t: 50 },
+        ],
+      ], repairGuide);
+      add("repair-does-not-split-smooth-curve", smoothCurve === null, smoothCurve);
+
+      const mergeResult = mergeCrediblyContinuousStrokes([
+        [{ x: 20, y: 80, t: 0 }, { x: 80, y: 80, t: 20 }],
+        [{ x: 84, y: 80, t: 21 }, { x: 150, y: 80, t: 40 }],
+      ], repairGuide);
+      add(
+        "repair-merges-close-collinear-strokes",
+        mergeResult?.strokes?.length === 1 && mergeResult.mergeCount === 1,
+        mergeResult,
+      );
+
+      const perpendicularMerge = mergeCrediblyContinuousStrokes([
+        [{ x: 20, y: 80, t: 0 }, { x: 80, y: 80, t: 20 }],
+        [{ x: 82, y: 80, t: 21 }, { x: 82, y: 145, t: 40 }],
+      ], repairGuide);
+      add("repair-does-not-merge-perpendicular-strokes", perpendicularMerge === null, perpendicularMerge);
+
+      const tapFiltered = filterAccidentalTapStrokes([
+        [{ x: 10, y: 10, t: 0 }, { x: 10.2, y: 10.1, t: 1 }],
+        [{ x: 30, y: 80, t: 2 }, { x: 160, y: 80, t: 30 }],
+      ], repairGuide, false);
+      add(
+        "repair-filters-one-zero-length-tap-in-character-mode",
+        tapFiltered?.strokes?.length === 1,
+        tapFiltered,
+      );
+      add(
+        "repair-preserves-taps-in-free-mode",
+        filterAccidentalTapStrokes([
+          [{ x: 10, y: 10, t: 0 }, { x: 10.2, y: 10.1, t: 1 }],
+          [{ x: 30, y: 80, t: 2 }, { x: 160, y: 80, t: 30 }],
+        ], repairGuide, true) === null,
+      );
+
+      state.strokes = [[{ x: 15, y: 80, t: 0 }, { x: 170, y: 80, t: 30 }]];
+      const repairStatsEvaluation = evaluateCandidateEnsemble(
+        [{
+          source: "google",
+          variant: "repair-split",
+          penalty: RECOGNITION_REPAIR_SPLIT_PENALTY,
+          strokeStats: { rawCount: 2, virtualCount: 2 },
+          candidates: ["二"],
+        }],
+        { rawCount: 1, virtualCount: 1 },
+      );
+      add(
+        "repair-source-uses-variant-stroke-count",
+        repairStatsEvaluation.text === "二" &&
+          repairStatsEvaluation.accepted[0]?.repairSupported === true,
+        repairStatsEvaluation.accepted[0],
+      );
+
+      const repairVariantLimit = createRecognitionRepairVariants([
+        [
+          { x: 20, y: 30, t: 0 },
+          { x: 100, y: 30, t: 10 },
+          { x: 100, y: 120, t: 20 },
+        ],
+        [{ x: 100, y: 122, t: 21 }, { x: 160, y: 122, t: 30 }],
+        [{ x: 5, y: 5, t: 31 }, { x: 5.1, y: 5.1, t: 32 }],
+      ], repairGuide, { freeMode: false });
+      add(
+        "repair-variant-count-is-bounded",
+        repairVariantLimit.length <= MAX_RECOGNITION_REPAIR_VARIANTS,
+        repairVariantLimit.map((item) => item.variant),
+      );
+
+      const repairReplay = replayRecognitionCorpus({
+        records: [{
+          question: { inputMode: "character", expectedAnswer: "二", activeSlotIndex: 0 },
+          expectedText: "二",
+          selectedText: "",
+          strokeStats: { rawCount: 1, virtualCount: 1 },
+          ink: [[[10, 90], [50, 50], [0, 100]]],
+          candidates: {
+            repairs: [{
+              variant: "repair-split",
+              penalty: RECOGNITION_REPAIR_SPLIT_PENALTY,
+              strokeStats: { rawCount: 2, virtualCount: 2 },
+              candidates: ["二"],
+            }],
+          },
+        }],
+      });
+      add(
+        "corpus-replay-classifies-repair-rescue",
+        repairReplay.summary.correct === 1 && repairReplay.summary.repairRescued === 1,
+        repairReplay.summary,
       );
 
       const replay = replayRecognitionCorpus({
@@ -10239,10 +10711,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return Math.max(1, segments);
   }
 
-  function estimateInputStrokeStats() {
-    const guide = getCanvasGuide();
-    const rawCount = state.strokes.filter((stroke) => stroke.length > 1).length;
-    const virtualCount = state.strokes.reduce((total, stroke) => {
+  function estimateStrokeStats(strokes, guide = getCanvasGuide()) {
+    const source = Array.isArray(strokes) ? strokes : [];
+    const rawCount = source.filter((stroke) => stroke.length > 1).length;
+    const virtualCount = source.reduce((total, stroke) => {
       return total + estimateSegmentsInStroke(stroke, guide);
     }, 0);
 
@@ -10250,6 +10722,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       rawCount,
       virtualCount: Math.max(rawCount, virtualCount),
     };
+  }
+
+  function estimateInputStrokeStats() {
+    return estimateStrokeStats(state.strokes, getCanvasGuide());
   }
 
   function hasShinnyouChar(text) {
@@ -10759,6 +11235,15 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         source: String(group?.source || `source-${groupIndex}`),
         variant: String(group?.variant || "raw"),
         penalty: Number.isFinite(group?.penalty) ? group.penalty : 0,
+        strokeStats: group?.strokeStats &&
+          Number.isFinite(group.strokeStats.rawCount) &&
+          Number.isFinite(group.strokeStats.virtualCount)
+          ? {
+              rawCount: group.strokeStats.rawCount,
+              virtualCount: group.strokeStats.virtualCount,
+            }
+          : null,
+        transform: group?.transform || null,
         candidates: normalizeCandidates(group?.candidates || []),
       }))
       .filter((group) => group.candidates.length > 0);
@@ -10775,15 +11260,18 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
 
     normalizeCandidateSourceGroups(sourceGroups).forEach((group) => {
+      const effectiveStrokeStats = group.strokeStats || strokeStats;
       group.candidates.forEach((candidate, rank) => {
         STRUCTURAL_ALTERNATIVE_RULES.forEach((rule) => {
-          if (candidate === rule.source && canUseStructuralAlternative(rule, strokeStats)) {
+          if (candidate === rule.source && canUseStructuralAlternative(rule, effectiveStrokeStats)) {
             add(rule.target, {
               source: group.source,
               variant: group.variant,
               rank,
               penalty: group.penalty + 0.22,
               alternativeOf: candidate,
+              strokeStats: effectiveStrokeStats,
+              transform: group.transform,
             });
           }
         });
@@ -10794,6 +11282,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           rank,
           penalty: group.penalty,
           alternativeOf: "",
+          strokeStats: effectiveStrokeStats,
+          transform: group.transform,
         });
       });
     });
@@ -10814,18 +11304,46 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         reasons.push("mode-mismatch");
       }
 
-      const compatibility = reasons.length === 0
-        ? evaluateStrokeCompatibility(text, strokeStats)
-        : {
-            pass: false,
-            reasons: [],
-            warnings: [],
-            scorePenalty: 0,
-            expectedRange: null,
-            structure: null,
-            unknownStrokeCount: false,
-          };
-      reasons.push(...compatibility.reasons);
+      const membershipCompatibility = reasons.length === 0
+        ? memberships.map((membership) => {
+            const effectiveStrokeStats = membership.strokeStats || strokeStats;
+            const compatibility = evaluateStrokeCompatibility(text, effectiveStrokeStats);
+            return {
+              membership,
+              strokeStats: effectiveStrokeStats,
+              compatibility,
+              cost: getCandidateStrokeRank(text, effectiveStrokeStats, 0) +
+                compatibility.scorePenalty +
+                membership.penalty +
+                membership.rank * RECOGNITION_SOURCE_RANK_WEIGHT,
+            };
+          })
+        : [];
+      const passingCompatibility = membershipCompatibility
+        .filter((item) => item.compatibility.pass)
+        .sort((a, b) => a.cost - b.cost);
+      const selectedMembershipCompatibility = passingCompatibility[0] ||
+        membershipCompatibility.sort((a, b) =>
+          a.compatibility.reasons.length - b.compatibility.reasons.length ||
+          a.cost - b.cost
+        )[0] || null;
+      const compatibility = selectedMembershipCompatibility?.compatibility || {
+        pass: false,
+        reasons: [],
+        warnings: [],
+        scorePenalty: 0,
+        expectedRange: null,
+        structure: null,
+        unknownStrokeCount: false,
+      };
+
+      if (passingCompatibility.length === 0) {
+        const compatibilityReasons = new Set();
+        membershipCompatibility.forEach((item) =>
+          item.compatibility.reasons.forEach((reason) => compatibilityReasons.add(reason))
+        );
+        reasons.push(...compatibilityReasons);
+      }
 
       const spatial = reasons.length === 0
         ? getCandidateSpatialFit(text, spatialProfile)
@@ -10834,12 +11352,15 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         reasons.push("spatial-support-insufficient");
       }
 
-      const engines = new Set(memberships.map((item) => item.source));
-      const variants = new Set(memberships.map((item) => `${item.source}:${item.variant}`));
+      const scoringMemberships = passingCompatibility.length > 0
+        ? passingCompatibility.map((item) => item.membership)
+        : memberships;
+      const engines = new Set(scoringMemberships.map((item) => item.source));
+      const variants = new Set(scoringMemberships.map((item) => `${item.source}:${item.variant}`));
       const crossEngineConsensus = engines.has("native") && engines.has("google");
-      const bestSourceRank = Math.min(...memberships.map((item) => item.rank));
+      const bestSourceRank = Math.min(...scoringMemberships.map((item) => item.rank));
       const sourceRankPenalty = Math.min(
-        ...memberships.map((item) =>
+        ...scoringMemberships.map((item) =>
           item.rank * RECOGNITION_SOURCE_RANK_WEIGHT + item.penalty
         ),
       );
@@ -10857,14 +11378,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         reasons.push("unknown-stroke-count-low-confidence");
       }
 
-      const pass = reasons.length === 0;
+      const pass = reasons.length === 0 && Boolean(selectedMembershipCompatibility);
+      const effectiveStrokeStats = selectedMembershipCompatibility?.strokeStats || strokeStats;
       const score = pass
-        ? getCandidateStrokeRank(text, strokeStats, 0) +
+        ? getCandidateStrokeRank(text, effectiveStrokeStats, 0) +
           compatibility.scorePenalty +
           spatial.penalty +
           sourceRankPenalty -
           consensusBonus
         : Number.POSITIVE_INFINITY;
+      const repairMemberships = scoringMemberships.filter((item) =>
+        String(item.variant || "").startsWith("repair-")
+      );
+      const nonRepairMemberships = scoringMemberships.filter((item) =>
+        !String(item.variant || "").startsWith("repair-")
+      );
 
       return {
         text,
@@ -10879,8 +11407,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         unknownStrokeCount: Boolean(compatibility.unknownStrokeCount),
         spatial,
         memberships,
+        effectiveStrokeStats,
         crossEngineConsensus,
         variantCount: variants.size,
+        repairSupported: repairMemberships.length > 0,
+        repairRequired: repairMemberships.length > 0 && nonRepairMemberships.length === 0,
+        selectedVariant: selectedMembershipCompatibility?.membership?.variant || "",
+        repairVariants: Array.from(new Set(repairMemberships.map((item) => item.variant))),
       };
     });
 
@@ -11220,6 +11753,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       let nativeCandidates = [];
       let googleRawCandidates = [];
       let googleNormalizedCandidates = [];
+      let repairCandidateGroups = [];
       let nativeEvaluation = null;
       let ensembleEvaluation = null;
       let recognitionPath = "cache";
@@ -11262,7 +11796,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         const guide = getCanvasGuide();
         const shouldTryNormalizedGoogle =
           !ensembleEvaluation?.text ||
-          !isCandidateEvaluationDecisive(ensembleEvaluation);
+          (
+            !isCandidateEvaluationDecisive(ensembleEvaluation) &&
+            isNormalizedVariantUseful(state.strokes, guide)
+          );
 
         if (shouldTryNormalizedGoogle) {
           recognitionPath += "+google-normalized";
@@ -11277,6 +11814,37 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
             });
           }
           ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
+        }
+
+        const shouldTryRepairVariants =
+          !ensembleEvaluation?.text ||
+          !isCandidateEvaluationDecisive(ensembleEvaluation);
+        if (shouldTryRepairVariants) {
+          const repairVariants = createRecognitionRepairVariants(
+            state.strokes,
+            guide,
+            { freeMode: isFreeMode() },
+          );
+          for (const repair of repairVariants) {
+            recognitionPath += `+${repair.variant}`;
+            const candidates = await recognizeWithGoogle(repair.strokes);
+            const repairGroup = {
+              source: "google",
+              variant: repair.variant,
+              penalty: repair.penalty,
+              strokeStats: repair.strokeStats,
+              transform: repair.transform,
+              candidates,
+            };
+            repairCandidateGroups.push(repairGroup);
+            if (candidates.length > 0) {
+              sourceGroups.push(repairGroup);
+              ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
+            }
+            if (isCandidateEvaluationDecisive(ensembleEvaluation)) {
+              break;
+            }
+          }
         }
 
         text = ensembleEvaluation?.text || "";
@@ -11305,6 +11873,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         nativeCandidates,
         googleRawCandidates,
         googleNormalizedCandidates,
+        repairCandidateGroups,
         nativeEvaluation,
         ensembleEvaluation,
         recognitionPath,
@@ -12382,11 +12951,29 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           combinedCandidates.push(...googleRawCandidates);
         }
 
+        const guide = getTraceCanvasSize();
         if (!traceCandidatesContainTarget(combinedCandidates)) {
-          const guide = getTraceCanvasSize();
           const normalizedStrokes = normalizeStrokesToGuide(state.trace.strokes, guide);
           const googleNormalizedCandidates = await recognizeTraceWithGoogle(normalizedStrokes);
           combinedCandidates.push(...googleNormalizedCandidates);
+        }
+
+        if (!traceCandidatesContainTarget(combinedCandidates)) {
+          const repairVariants = createRecognitionRepairVariants(
+            state.trace.strokes,
+            guide,
+            {
+              freeMode: isKanaOnly(state.trace.answer) ||
+                getCharacterLength(state.trace.answer) > 1,
+            },
+          );
+          for (const repair of repairVariants) {
+            const repairCandidates = await recognizeTraceWithGoogle(repair.strokes);
+            combinedCandidates.push(...repairCandidates);
+            if (traceCandidatesContainTarget(combinedCandidates)) {
+              break;
+            }
+          }
         }
 
         text = selectTraceCandidate(combinedCandidates);
