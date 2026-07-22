@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.3.0" />
+    <meta name="application-version" content="1.4.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -32,7 +32,7 @@
   --incorrect: #efb1aa;
   --shadow: rgba(0, 0, 0, 0.28);
   --radius: clamp(9px, 1.6vw, 14px);
-  --educational-font: "UD Digi Kyokasho NP-R", "YuKyokasho", "Yu Kyokasho", "Hiragino Mincho ProN", "BIZ UDPMincho", serif;
+  --educational-font: "UD Digi Kyokasho N-R", "UD Digi Kyokasho NK-R", "UD Digi Kyokasho NP-R", "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
 }
 
 * {
@@ -92,6 +92,18 @@ input[type="file"] {
 
 button {
   color: inherit;
+}
+
+.question-text,
+.question-prompt,
+.character-slot,
+.slot-message,
+.trace-question-text,
+.trace-recognition-text,
+.trace-free-label {
+  font-synthesis: none;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "clig" 0;
 }
 
 [hidden] {
@@ -7522,7 +7534,7 @@ input:focus-visible,
   <body>
     <main id="app" class="app" data-layout="horizontal" data-handedness="right" aria-labelledby="app-title">
       <header class="app-header">
-        <h1 id="app-title" class="app-title">4年　全</h1>
+        <h1 id="app-title" class="app-title">DigiCanji</h1>
         <div class="progress-wrap" aria-live="polite">
           <span id="progress-text" class="progress-text">1 / 1</span>
           <span class="progress-track" aria-hidden="true"><span id="progress-bar" class="progress-bar"></span></span>
@@ -7776,11 +7788,20 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const DECISIVE_MARGIN = 0.85;
   const GOOGLE_NORMALIZATION_PADDING_RATIO = 0.08;
   const EDUCATIONAL_FONT_CANDIDATES = Object.freeze([
+    "UD Digi Kyokasho N-R",
+    "UD Digi Kyokasho NK-R",
     "UD Digi Kyokasho NP-R",
-    "YuKyokasho",
-    "Yu Kyokasho",
-    "Hiragino Mincho ProN",
-    "BIZ UDPMincho",
+    "BIZ UDPGothic",
+    "Hiragino Kaku Gothic ProN",
+    "Yu Gothic",
+    "Meiryo",
+  ]);
+  const EDUCATIONAL_FONT_FALLBACKS = Object.freeze([
+    "BIZ UDPGothic",
+    "Hiragino Kaku Gothic ProN",
+    "Yu Gothic",
+    "Meiryo",
+    "sans-serif",
   ]);
   const RECOGNITION_DEBUG_QUERY = new URLSearchParams(window.location.search).get("recognitionDebug");
   const RECOGNITION_DIAGNOSTICS_ENABLED = RECOGNITION_DEBUG_QUERY === "1" || RECOGNITION_DEBUG_QUERY === "true";
@@ -7890,8 +7911,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     },
   ]);
 
-  // 問題文・認識欄・なぞり書きは、端末に標準搭載された教科書体を同じ順序で使用する。
-  // 字ごとの独自ベクター補正は行わず、字体の一貫性を優先する。
+  // 問題文・認識欄・なぞり書きは、楷書・教科書体を優先し、
+  // つなぎ字や明朝体のうろこが出にくい角ゴシック系へ段階的にフォールバックする。
+  // 字ごとの独自ベクター補正は行わず、端末内フォントだけで表示を安定させる。
   const EDUCATIONAL_KANA_PATHS = Object.freeze({});
 
   const GOOGLE_HANDWRITING_URLS = [
@@ -9146,6 +9168,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     });
   }
 
+  let resolvedEducationalFontName = "";
+
   function getEducationalFontDiagnostics() {
     const fontSet = document.fonts;
     const availability = EDUCATIONAL_FONT_CANDIDATES.map((name) => {
@@ -9163,11 +9187,44 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         fontFaceSetCheck,
       };
     });
+    const firstAvailable = availability.find((item) => item.available)?.name || "";
     return {
       cssStack: getComputedStyle(questionText).fontFamily,
       availability,
-      firstAvailable: availability.find((item) => item.available)?.name || "system-fallback",
+      firstAvailable: firstAvailable || "system-fallback",
+      selected: resolvedEducationalFontName || firstAvailable || "system-fallback",
+      policy: "kaisho-then-gothic-no-mincho",
     };
+  }
+
+  function applyEducationalFontChoice() {
+    const diagnostics = getEducationalFontDiagnostics();
+    resolvedEducationalFontName = diagnostics.firstAvailable === "system-fallback"
+      ? ""
+      : diagnostics.firstAvailable;
+    const ordered = [
+      resolvedEducationalFontName,
+      ...EDUCATIONAL_FONT_CANDIDATES,
+      ...EDUCATIONAL_FONT_FALLBACKS,
+    ].filter(Boolean);
+    const unique = Array.from(new Set(ordered));
+    const stack = unique
+      .map((name) => name === "sans-serif" ? name : `"${name}"`)
+      .join(", ");
+    document.documentElement.style.setProperty("--educational-font", stack);
+    return diagnostics;
+  }
+
+  function getEducationalCanvasFont(fontSize, weight = 400) {
+    const primary = resolvedEducationalFontName || EDUCATIONAL_FONT_CANDIDATES[0];
+    const fallbacks = Array.from(new Set([
+      ...EDUCATIONAL_FONT_CANDIDATES,
+      ...EDUCATIONAL_FONT_FALLBACKS,
+    ]))
+      .filter((name) => name !== primary)
+      .map((name) => name === "sans-serif" ? name : `"${name}"`)
+      .join(", ");
+    return `${weight} ${fontSize}px "${primary}", ${fallbacks}`;
   }
 
   function getSerializableInkBounds() {
@@ -9607,6 +9664,70 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         normalizedBounds,
       );
 
+      state.recognitionModeOverride = "free";
+      state.strokes = [
+        [{ x: 22, y: 18, t: 0 }, { x: 18, y: 105, t: 50 }, { x: 52, y: 118, t: 85 }],
+        [{ x: 72, y: 18, t: 90 }, { x: 82, y: 29, t: 100 }],
+        [{ x: 75, y: 42, t: 110 }, { x: 85, y: 53, t: 120 }],
+      ];
+      const verticalDakuten = evaluateKanaDiacriticEvidence("じ");
+      add(
+        "vertical-dakuten-evidence-supported",
+        verticalDakuten.pass && verticalDakuten.orientation === "vertical",
+        verticalDakuten,
+      );
+      state.strokes = [
+        [{ x: 22, y: 18, t: 0 }, { x: 18, y: 105, t: 50 }, { x: 52, y: 118, t: 85 }],
+      ];
+      add(
+        "vertical-dakuten-not-invented",
+        !evaluateKanaDiacriticEvidence("じ").pass,
+        evaluateKanaDiacriticEvidence("じ"),
+      );
+      state.strokes = [
+        [{ x: 12, y: 82, t: 0 }, { x: 100, y: 78, t: 70 }],
+        [{ x: 78, y: 18, t: 80 }, { x: 89, y: 27, t: 90 }],
+        [{ x: 80, y: 37, t: 100 }, { x: 91, y: 46, t: 110 }],
+      ];
+      const horizontalDakuten = evaluateKanaDiacriticEvidence("じ");
+      add(
+        "horizontal-dakuten-evidence-supported",
+        horizontalDakuten.pass && horizontalDakuten.orientation === "horizontal",
+        horizontalDakuten,
+      );
+      state.strokes = [
+        [{ x: 20, y: 10, t: 0 }, { x: 24, y: 90, t: 20 }],
+        [{ x: 22, y: 185, t: 30 }, { x: 26, y: 265, t: 50 }],
+        [{ x: 20, y: 360, t: 60 }, { x: 24, y: 440, t: 80 }],
+      ];
+      const verticalProfile = getFreeInkSpatialProfile();
+      const verticalCells = getCandidateAxisCells("かくじ", verticalProfile);
+      add(
+        "vertical-free-writing-uses-adaptive-cells",
+        verticalCells.length === 3 && verticalCells.every((cell) => cell.source === "cluster"),
+        { profile: verticalProfile, cells: verticalCells },
+      );
+      state.strokes = [
+        [{ x: 18, y: 35, t: 0 }, { x: 72, y: 34, t: 15 }],
+        [{ x: 55, y: 12, t: 20 }, { x: 24, y: 112, t: 45 }],
+        [{ x: 74, y: 42, t: 50 }, { x: 84, y: 54, t: 60 }],
+        [{ x: 66, y: 165, t: 70 }, { x: 28, y: 210, t: 85 }, { x: 62, y: 252, t: 100 }],
+        [{ x: 20, y: 330, t: 110 }, { x: 18, y: 425, t: 140 }, { x: 55, y: 448, t: 160 }],
+        [{ x: 76, y: 328, t: 170 }, { x: 86, y: 340, t: 180 }],
+        [{ x: 78, y: 354, t: 190 }, { x: 88, y: 366, t: 200 }],
+      ];
+      const verticalWordEvaluation = evaluateCandidateEnsemble(
+        [{ source: "google", variant: "raw", candidates: ["かくじ", "かくし"] }],
+        { rawCount: 7, virtualCount: 7 },
+      );
+      add(
+        "vertical-kakuji-candidate-is-not-rejected",
+        verticalWordEvaluation.text === "かくじ" &&
+          verticalWordEvaluation.accepted[0]?.text === "かくじ",
+        verticalWordEvaluation,
+      );
+
+      state.recognitionModeOverride = "character";
       const repairGuide = { width: 200, height: 200 };
       const splitResult = splitStrokesAtCredibleCorners([
         [
@@ -9748,6 +9869,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const ids = STRUCTURAL_COMPONENT_RULES.map((rule) => rule.id);
     add("structural-rule-ids-unique", new Set(ids).size === ids.length, ids);
     add("educational-kana-vector-exceptions-removed", Object.keys(EDUCATIONAL_KANA_PATHS).length === 0);
+    add(
+      "educational-font-stack-excludes-mincho-and-cursive-fallbacks",
+      EDUCATIONAL_FONT_CANDIDATES.every((name) => !/Mincho|Kyokasho$/i.test(name)) &&
+        !EDUCATIONAL_FONT_CANDIDATES.some((name) => name === "YuKyokasho" || name === "Yu Kyokasho"),
+      EDUCATIONAL_FONT_CANDIDATES,
+    );
 
     return {
       pass: cases.every((item) => item.pass),
@@ -10291,8 +10418,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function getStrokeFeatures() {
     return state.strokes
-      .filter((stroke) => stroke.length > 1)
-      .map((stroke) => {
+      .map((stroke, strokeIndex) => ({ stroke, strokeIndex }))
+      .filter((item) => item.stroke.length > 1)
+      .map(({ stroke, strokeIndex }) => {
         const xs = stroke.map((point) => point.x);
         const ys = stroke.map((point) => point.y);
         const left = Math.min(...xs);
@@ -10309,6 +10437,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           height: Math.max(1, bottom - top),
           centerX: (left + right) / 2,
           centerY: (top + bottom) / 2,
+          strokeIndex,
           length: getStrokeLength(stroke),
           start: stroke[0],
           end: stroke[stroke.length - 1],
@@ -11099,9 +11228,82 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       crossEnd: horizontal ? bounds.bottom : bounds.right,
       crossSpan: horizontal ? bounds.height : bounds.width,
       clusterCount: merged.length,
+      clusters: merged.map((cluster) => ({
+        start: cluster.start,
+        end: cluster.end,
+        center: (cluster.start + cluster.end) / 2,
+        span: Math.max(1, cluster.end - cluster.start),
+      })),
       features,
       totalLength: features.reduce((sum, feature) => sum + feature.length, 0),
     };
+  }
+
+  function mergeAxisClustersToCount(clusters, targetCount) {
+    const output = (Array.isArray(clusters) ? clusters : [])
+      .map((cluster) => ({ ...cluster }))
+      .sort((a, b) => a.start - b.start);
+
+    while (output.length > targetCount && output.length > 1) {
+      let bestIndex = 0;
+      let bestGap = Infinity;
+      for (let index = 0; index < output.length - 1; index += 1) {
+        const gap = Math.max(0, output[index + 1].start - output[index].end);
+        if (gap < bestGap) {
+          bestGap = gap;
+          bestIndex = index;
+        }
+      }
+      const left = output[bestIndex];
+      const right = output[bestIndex + 1];
+      const merged = {
+        start: Math.min(left.start, right.start),
+        end: Math.max(left.end, right.end),
+      };
+      merged.center = (merged.start + merged.end) / 2;
+      merged.span = Math.max(1, merged.end - merged.start);
+      output.splice(bestIndex, 2, merged);
+    }
+
+    return output;
+  }
+
+  function getCandidateAxisCells(text, profile = getFreeInkSpatialProfile()) {
+    const count = Math.max(1, getCharacterLength(text));
+    if (!profile) {
+      return [];
+    }
+
+    const equalCells = Array.from({ length: count }, (_, index) => ({
+      start: profile.axisStart + profile.axisSpan * index / count,
+      end: profile.axisStart + profile.axisSpan * (index + 1) / count,
+      source: "equal",
+    }));
+    const rawClusters = Array.isArray(profile.clusters) ? profile.clusters : [];
+    if (rawClusters.length < count || rawClusters.length > count + 3) {
+      return equalCells;
+    }
+
+    const clusters = mergeAxisClustersToCount(rawClusters, count);
+    if (clusters.length !== count) {
+      return equalCells;
+    }
+
+    return clusters.map((cluster, index) => {
+      const previous = clusters[index - 1];
+      const next = clusters[index + 1];
+      const start = previous
+        ? (previous.end + cluster.start) / 2
+        : profile.axisStart;
+      const end = next
+        ? (cluster.end + next.start) / 2
+        : profile.axisEnd;
+      return {
+        start: Math.min(start, end),
+        end: Math.max(start, end),
+        source: "cluster",
+      };
+    });
   }
 
   function getKanaDiacriticRequirements(text) {
@@ -11119,35 +11321,103 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function evaluateKanaDiacriticEvidence(text, profile = getFreeInkSpatialProfile()) {
     const requirements = getKanaDiacriticRequirements(text);
     if (requirements.length === 0) {
-      return { pass: true, requirements: [], matched: [] };
+      return { pass: true, requirements: [], matched: [], orientation: "none" };
     }
     if (!profile) {
-      return { pass: false, requirements, matched: [] };
+      return { pass: false, requirements, matched: [], orientation: "unknown" };
     }
 
-    const characterCount = Math.max(1, getCharacterLength(text));
-    const cellSpan = profile.axisSpan / characterCount;
-    const diagonal = Math.hypot(cellSpan, profile.crossSpan);
+    const cells = getCandidateAxisCells(text, profile);
+    const usedStrokeIndexes = new Set();
     const matched = requirements.map((requirement) => {
-      const cellStart = profile.axisStart + cellSpan * requirement.index;
-      const cellEnd = cellStart + cellSpan;
-      const candidates = profile.features.filter((feature) => {
-        const axisCenter = profile.horizontal ? feature.centerX : feature.centerY;
-        const crossCenter = profile.horizontal ? feature.centerY : feature.centerX;
-        const axisRatio = (axisCenter - cellStart) / Math.max(1, cellSpan);
-        const crossRatio = (crossCenter - profile.crossStart) / Math.max(1, profile.crossSpan);
-        const maxLength = diagonal * (requirement.requiredStrokes === 1 ? 0.68 : 0.48);
-        return (
-          axisRatio >= 0.32 &&
-          axisRatio <= 1.28 &&
-          crossRatio <= 0.58 &&
-          feature.length <= maxLength
+      const cell = cells[requirement.index] || {
+        start: profile.axisStart,
+        end: profile.axisEnd,
+      };
+      const cellSpan = Math.max(1, cell.end - cell.start);
+      const localDiagonal = Math.hypot(cellSpan, profile.crossSpan);
+      const candidates = profile.features
+        .map((feature) => {
+          const axisCenter = profile.horizontal ? feature.centerX : feature.centerY;
+          const crossCenter = profile.horizontal ? feature.centerY : feature.centerX;
+          const axisRatio = (axisCenter - cell.start) / cellSpan;
+          const crossRatio = (crossCenter - profile.crossStart) / Math.max(1, profile.crossSpan);
+          const axisExtent = profile.horizontal ? feature.width : feature.height;
+          const crossExtent = profile.horizontal ? feature.height : feature.width;
+          const maxLength = localDiagonal * (requirement.requiredStrokes === 1 ? 0.56 : 0.38);
+          const compact =
+            feature.length <= maxLength &&
+            axisExtent <= cellSpan * 0.48 &&
+            crossExtent <= profile.crossSpan * 0.56;
+          const inExpectedZone = profile.horizontal
+            ? (
+              axisRatio >= 0.42 &&
+              axisRatio <= 1.22 &&
+              crossRatio >= -0.12 &&
+              crossRatio <= 0.58
+            )
+            : (
+              axisRatio >= -0.15 &&
+              axisRatio <= 0.62 &&
+              crossRatio >= 0.42 &&
+              crossRatio <= 1.18
+            );
+          const zoneDistance = profile.horizontal
+            ? Math.abs(axisRatio - 0.82) + Math.abs(crossRatio - 0.16)
+            : Math.abs(axisRatio - 0.20) + Math.abs(crossRatio - 0.82);
+          return {
+            feature,
+            axisRatio,
+            crossRatio,
+            zoneDistance,
+            pass: compact && inExpectedZone,
+          };
+        })
+        .filter((item) => item.pass && !usedStrokeIndexes.has(item.feature.strokeIndex))
+        .sort((a, b) => a.zoneDistance - b.zoneDistance || a.feature.length - b.feature.length);
+
+      const selected = candidates.slice(0, requirement.requiredStrokes);
+      let pairGeometryPass = true;
+      let pairDistance = null;
+      let pairAngle = null;
+      if (requirement.requiredStrokes === 2 && selected.length === 2) {
+        const first = selected[0].feature;
+        const second = selected[1].feature;
+        pairDistance = Math.hypot(
+          first.centerX - second.centerX,
+          first.centerY - second.centerY,
         );
-      });
+        pairAngle = getVectorAngle(
+          { x: first.end.x - first.start.x, y: first.end.y - first.start.y },
+          { x: second.end.x - second.start.x, y: second.end.y - second.start.y },
+        );
+        const lengthRatio = Math.min(first.length, second.length) /
+          Math.max(1, Math.max(first.length, second.length));
+        pairGeometryPass =
+          pairDistance <= localDiagonal * 0.3 &&
+          pairAngle <= Math.PI * 0.38 &&
+          lengthRatio >= 0.28;
+      }
+      const pass =
+        selected.length >= requirement.requiredStrokes &&
+        pairGeometryPass;
+      if (pass) {
+        selected.forEach((item) => usedStrokeIndexes.add(item.feature.strokeIndex));
+      }
       return {
         ...requirement,
-        foundStrokes: candidates.length,
-        pass: candidates.length >= requirement.requiredStrokes,
+        cellSource: cell.source || "fallback",
+        foundStrokes: selected.length,
+        pairGeometryPass,
+        pairDistance: Number.isFinite(pairDistance) ? Math.round(pairDistance * 10) / 10 : null,
+        pairAngle: Number.isFinite(pairAngle) ? Math.round(pairAngle * 1000) / 1000 : null,
+        pass,
+        evidence: selected.map((item) => ({
+          strokeIndex: item.feature.strokeIndex,
+          axisRatio: Math.round(item.axisRatio * 1000) / 1000,
+          crossRatio: Math.round(item.crossRatio * 1000) / 1000,
+          length: Math.round(item.feature.length * 10) / 10,
+        })),
       };
     });
 
@@ -11155,23 +11425,30 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       pass: matched.every((item) => item.pass),
       requirements,
       matched,
+      orientation: profile.horizontal ? "horizontal" : "vertical",
     };
   }
 
   function getCandidateSpatialFit(text, profile = getFreeInkSpatialProfile()) {
     const chars = Array.from(text);
     if (!isFreeMode() || chars.length <= 1 || !profile) {
-      return { penalty: 0, hardReject: false, weakCells: 0, clusterCount: profile?.clusterCount || 0 };
+      return {
+        penalty: 0,
+        hardReject: false,
+        weakCells: 0,
+        clusterCount: profile?.clusterCount || 0,
+        cellModel: "none",
+      };
     }
 
-    const cellSpan = profile.axisSpan / chars.length;
+    const cells = getCandidateAxisCells(text, profile);
     const inkByCell = Array(chars.length).fill(0);
     profile.features.forEach((feature) => {
       const center = profile.horizontal ? feature.centerX : feature.centerY;
-      const index = Math.max(
-        0,
-        Math.min(chars.length - 1, Math.floor((center - profile.axisStart) / Math.max(1, cellSpan))),
-      );
+      let index = cells.findIndex((cell) => center >= cell.start && center <= cell.end);
+      if (index < 0) {
+        index = center < cells[0].start ? 0 : cells.length - 1;
+      }
       inkByCell[index] += feature.length;
     });
 
@@ -11180,24 +11457,29 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     let unsupportedSmallKana = 0;
     inkByCell.forEach((ink, index) => {
       const smallKana = SMALL_KANA_PATTERN.test(chars[index]);
-      const threshold = averageInk * (smallKana ? 0.08 : 0.16);
+      const threshold = averageInk * (smallKana ? 0.07 : 0.13);
       if (ink < threshold) {
         weakCells += 1;
-        if (smallKana && ink < averageInk * 0.035) {
+        if (smallKana && ink < averageInk * 0.025) {
           unsupportedSmallKana += 1;
         }
       }
     });
 
     const clusterShortfall = Math.max(0, chars.length - profile.clusterCount - 1);
-    const penalty = weakCells * 1.35 + unsupportedSmallKana * 2.4 + clusterShortfall * 3.2;
+    const penalty = weakCells * 1.05 + unsupportedSmallKana * 1.9 + clusterShortfall * 2.35;
+    const extremeCollapse =
+      chars.length >= 4 &&
+      profile.clusterCount <= 1 &&
+      weakCells >= Math.ceil(chars.length / 2);
 
     return {
       penalty,
-      hardReject: clusterShortfall >= 3 || unsupportedSmallKana >= 1,
+      hardReject: extremeCollapse || unsupportedSmallKana >= 2,
       weakCells,
       unsupportedSmallKana,
       clusterCount: profile.clusterCount,
+      cellModel: cells[0]?.source || "equal",
       inkByCell: inkByCell.map((value) => Math.round(value * 10) / 10),
     };
   }
@@ -12632,7 +12914,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     traceContext.fillStyle = "rgba(244, 240, 223, 0.19)";
     traceContext.textAlign = "center";
     traceContext.textBaseline = "middle";
-    traceContext.font = `700 ${fontSize}px "UD Digi Kyokasho NP-R", "YuKyokasho", "Yu Kyokasho", "Hiragino Mincho ProN", "BIZ UDPMincho", serif`;
+    traceContext.font = getEducationalCanvasFont(fontSize, 400);
+    traceContext.fontKerning = "none";
 
     answerChars.forEach((char, index) => {
       let row;
@@ -13164,6 +13447,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   async function init() {
+    applyEducationalFontChoice();
     const title = String(quizPackage.title || "DigiCanji").trim() || "DigiCanji";
     document.title = title;
     appTitle.textContent = title;
@@ -13182,6 +13466,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       setResult(messages.empty, "message");
     }
     scheduleLayoutFit();
+    if (document.fonts?.ready) {
+      document.fonts.ready.then(() => {
+        applyEducationalFontChoice();
+        renderResultArea();
+        scheduleLayoutFit();
+        if (!traceOverlay.hidden) {
+          drawTraceCanvas();
+          scheduleTraceLayoutFit();
+        }
+      }).catch(() => {});
+    }
   }
 
   function preventCanvasGesture(event) {
