@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.6.0" />
+    <meta name="application-version" content="1.7.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -7829,8 +7829,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const GLYPH_SHAPE_CACHE_LIMIT = 384;
   const GLYPH_SHAPE_COVERAGE_RADIUS = 2.55;
   const GLYPH_SHAPE_SCORE_FLOOR = 0.055;
-  const GLYPH_SHAPE_HARD_SCORE = 0.16;
-  const GLYPH_SHAPE_WEAK_SCORE = 0.105;
+  const GLYPH_SHAPE_HARD_SCORE = 0.19;
+  const GLYPH_SHAPE_WEAK_SCORE = 0.115;
   const GLYPH_SHAPE_MIN_INK_COVERAGE = 0.70;
   const GLYPH_SHAPE_MIN_GLYPH_COVERAGE = 0.58;
   const GOOGLE_NORMALIZATION_PADDING_RATIO = 0.08;
@@ -7955,6 +7955,79 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       id: "reject-crow-as-bird",
       applies: (text) => text === "鳥",
       test: () => !hasLikelyCrowStructure(),
+    },
+  ]);
+
+  // 字形の揺れは広く許容する一方、別の実在部品へ変わる差や、
+  // 点画の接続関係そのものが変わる差は学習上の弁別点として扱う。
+  // 規則は完成文字ではなく、再利用可能な部品族と位相関係に対して定義する。
+  const USHI_COMPONENT_PREFIX_CHARS = new Set(Array.from("物牧牡牲特犠犢"));
+  const USHI_COMPONENT_SUFFIX_CHARS = new Set(Array.from("牛件"));
+  const YOSHI_COMPONENT_SUFFIX_CHARS = new Set(Array.from("吉結詰桔姞"));
+  const MI_COMPONENT_SUFFIX_CHARS = new Set(Array.from("未味妹魅"));
+  const MATSU_COMPONENT_SUFFIX_CHARS = new Set(Array.from("末抹沫茉秣"));
+  const YUU_COMPONENT_SUFFIX_CHARS = new Set(Array.from("由油抽宙笛届袖軸"));
+  const SAKU_COMPONENT_SUFFIX_CHARS = new Set(Array.from("乍昨作詐炸搾窄"));
+  const BUN_COMPONENT_PREFIX_CHARS = new Set(Array.from("文対斉斎"));
+  const BUN_COMPONENT_SUFFIX_CHARS = new Set(Array.from("紋蚊雯"));
+  const ENNYOU_COMPONENT_CHARS = new Set(Array.from("建健廷庭延誕"));
+
+  const CONTRASTIVE_COMPONENT_RULES = Object.freeze([
+    {
+      id: "ushi-not-uma-prefix",
+      applies: (text) => USHI_COMPONENT_PREFIX_CHARS.has(text),
+      test: () => evaluateUshiAgainstUmaComponent(0, 4),
+    },
+    {
+      id: "ushi-not-uma-suffix",
+      applies: (text) => USHI_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateUshiAgainstUmaComponent(Math.max(0, state.strokes.length - 4), 4),
+    },
+    {
+      id: "shi-not-tsuchi-in-yoshi",
+      applies: (text) => YOSHI_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateHorizontalLengthContrast(
+        Math.max(0, state.strokes.length - 6), 0, 2, "upper-longer",
+      ),
+    },
+    {
+      id: "mi-not-matsu",
+      applies: (text) => MI_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateHorizontalLengthContrast(
+        Math.max(0, state.strokes.length - 5), 0, 1, "upper-shorter",
+      ),
+    },
+    {
+      id: "matsu-not-mi",
+      applies: (text) => MATSU_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateHorizontalLengthContrast(
+        Math.max(0, state.strokes.length - 5), 0, 1, "upper-longer",
+      ),
+    },
+    {
+      id: "yuu-not-shin",
+      applies: (text) => YUU_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateYuuAgainstShinComponent(Math.max(0, state.strokes.length - 5), 5),
+    },
+    {
+      id: "saku-start-topology",
+      applies: (text) => SAKU_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateSakuComponentTopology(Math.max(0, state.strokes.length - 5), 5),
+    },
+    {
+      id: "bun-cross-topology-prefix",
+      applies: (text) => BUN_COMPONENT_PREFIX_CHARS.has(text),
+      test: () => evaluateBunComponentTopology(0, 4),
+    },
+    {
+      id: "bun-cross-topology-suffix",
+      applies: (text) => BUN_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateBunComponentTopology(Math.max(0, state.strokes.length - 4), 4),
+    },
+    {
+      id: "ennyou-not-shinnyou",
+      applies: (text) => ENNYOU_COMPONENT_CHARS.has(text),
+      test: evaluateEnnyouAgainstShinnyou,
     },
   ]);
 
@@ -9713,17 +9786,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const weakScore = GLYPH_SHAPE_WEAK_SCORE + complexityAllowance * 0.55;
     const minInkCoverage = GLYPH_SHAPE_MIN_INK_COVERAGE - Math.min(0.06, complexityAllowance * 1.6);
     const minGlyphCoverage = GLYPH_SHAPE_MIN_GLYPH_COVERAGE - Math.min(0.08, complexityAllowance * 2.1);
+    // フォントと手書きの局所的な接触・突出差は、ここでは順位調整にとどめる。
+    // 字体の弁別に関わる接続・長短・交差は contrastive structure 側で判定する。
     const hardReject =
-      comparison.score >= hardScore ||
       (
-        comparison.score >= weakScore &&
-        comparison.inkCoverage < minInkCoverage &&
-        comparison.glyphCoverage < minGlyphCoverage
+        comparison.score >= hardScore + 0.045 &&
+        comparison.inkCoverage < minInkCoverage - 0.11 &&
+        comparison.glyphCoverage < minGlyphCoverage - 0.11
       ) ||
-      (
-        comparison.score >= weakScore + 0.008 &&
-        comparison.glyphCoverage < minGlyphCoverage - 0.07
-      );
+      comparison.inkCoverage < 0.34 ||
+      comparison.glyphCoverage < 0.3;
     const penalty = Math.min(
       2.6,
       Math.max(0, comparison.score - GLYPH_SHAPE_SCORE_FLOOR) * 10 +
@@ -10452,8 +10524,79 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       add("glyph-shape-model-penalizes-extra-protrusion", false, "glyph unavailable");
     }
 
+    const contrastivePreviousStrokes = state.strokes;
+    try {
+      state.strokes = [
+        [{ x: 18, y: 34 }, { x: 10, y: 62 }],
+        [{ x: 15, y: 44 }, { x: 88, y: 44 }],
+        [{ x: 52, y: 18 }, { x: 52, y: 108 }],
+        [{ x: 12, y: 72 }, { x: 92, y: 72 }],
+      ];
+      add("contrastive-ushi-accepts-interior-cross", evaluateUshiAgainstUmaComponent(0, 4).status === "expected");
+      state.strokes[2] = [{ x: 52, y: 44 }, { x: 52, y: 108 }];
+      add("contrastive-ushi-rejects-uma-start", evaluateUshiAgainstUmaComponent(0, 4).hardReject === true);
+
+      state.strokes = [
+        [{ x: 10, y: 24 }, { x: 110, y: 24 }],
+        [{ x: 60, y: 10 }, { x: 60, y: 95 }],
+        [{ x: 30, y: 68 }, { x: 90, y: 68 }],
+      ];
+      add("contrastive-shi-accepts-long-upper", evaluateHorizontalLengthContrast(0, 0, 2, "upper-longer").status === "expected");
+      state.strokes[0] = [{ x: 30, y: 24 }, { x: 90, y: 24 }];
+      state.strokes[2] = [{ x: 10, y: 68 }, { x: 110, y: 68 }];
+      add("contrastive-shi-rejects-tsuchi", evaluateHorizontalLengthContrast(0, 0, 2, "upper-longer").hardReject === true);
+
+      state.strokes = [
+        [{ x: 34, y: 20 }, { x: 86, y: 20 }],
+        [{ x: 18, y: 42 }, { x: 102, y: 42 }],
+        [{ x: 60, y: 10 }, { x: 60, y: 105 }],
+        [{ x: 60, y: 62 }, { x: 20, y: 100 }],
+        [{ x: 60, y: 62 }, { x: 105, y: 100 }],
+      ];
+      add("contrastive-mi-accepts-short-upper", evaluateHorizontalLengthContrast(0, 0, 1, "upper-shorter").status === "expected");
+      state.strokes[0] = [{ x: 12, y: 20 }, { x: 108, y: 20 }];
+      state.strokes[1] = [{ x: 34, y: 42 }, { x: 86, y: 42 }];
+      add("contrastive-mi-rejects-matsu", evaluateHorizontalLengthContrast(0, 0, 1, "upper-shorter").hardReject === true);
+
+      state.strokes = [
+        [{ x: 18, y: 18 }, { x: 10, y: 42 }],
+        [{ x: 18, y: 36 }, { x: 102, y: 36 }],
+        [{ x: 58, y: 36 }, { x: 58, y: 108 }],
+        [{ x: 58, y: 60 }, { x: 102, y: 60 }],
+        [{ x: 58, y: 86 }, { x: 102, y: 86 }],
+      ];
+      add("contrastive-saku-accepts-correct-starts", evaluateSakuComponentTopology(0, 5).status === "expected");
+      state.strokes[1] = [{ x: 58, y: 36 }, { x: 102, y: 36 }];
+      state.strokes[2] = [{ x: 58, y: 18 }, { x: 58, y: 108 }];
+      add("contrastive-saku-rejects-reversed-attachment", evaluateSakuComponentTopology(0, 5).hardReject === true);
+
+      state.strokes = [
+        [{ x: 58, y: 10 }, { x: 58, y: 20 }],
+        [{ x: 18, y: 30 }, { x: 102, y: 30 }],
+        [{ x: 20, y: 48 }, { x: 92, y: 108 }],
+        [{ x: 100, y: 48 }, { x: 30, y: 108 }],
+      ];
+      add("contrastive-bun-accepts-interior-cross", evaluateBunComponentTopology(0, 4).status === "expected");
+      state.strokes[3] = [{ x: 20, y: 48 }, { x: 95, y: 88 }];
+      add("contrastive-bun-rejects-start-only-touch", evaluateBunComponentTopology(0, 4).hardReject === true);
+
+      state.strokes = [
+        [{ x: 42, y: 24 }, { x: 48, y: 35 }],
+        [{ x: 38, y: 52 }, { x: 25, y: 75 }, { x: 30, y: 105 }, { x: 105, y: 110 }],
+      ];
+      add("contrastive-ennyou-rejects-shinnyou-dot", evaluateEnnyouAgainstShinnyou().hardReject === true);
+    } finally {
+      state.strokes = contrastivePreviousStrokes;
+    }
+
     const ids = STRUCTURAL_COMPONENT_RULES.map((rule) => rule.id);
     add("structural-rule-ids-unique", new Set(ids).size === ids.length, ids);
+    const contrastiveIds = CONTRASTIVE_COMPONENT_RULES.map((rule) => rule.id);
+    add(
+      "contrastive-rule-ids-unique",
+      new Set(contrastiveIds).size === contrastiveIds.length,
+      contrastiveIds,
+    );
     add("educational-kana-vector-exceptions-removed", Object.keys(EDUCATIONAL_KANA_PATHS).length === 0);
     add(
       "educational-font-stack-excludes-mincho-and-cursive-fallbacks",
@@ -10479,6 +10622,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     getLastReplayReport: () => state.lastRecognitionReplayReport,
     getEducationalFontDiagnostics,
     evaluateGlyphShape: (text) => evaluateCandidateGlyphShape(String(text || "")),
+    evaluateContrastiveStructure: (text) => evaluateContrastiveCandidateStructure(String(text || "")),
     runSelfTests: runRecognitionSelfTests,
   });
 
@@ -10842,6 +10986,385 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       );
     }
     return distance;
+  }
+
+
+  function getStrokeProjection(point, stroke) {
+    if (!point || !Array.isArray(stroke) || stroke.length === 0) {
+      return { distance: Infinity, position: 0, point: null };
+    }
+    if (stroke.length === 1) {
+      return { distance: getDistance(point, stroke[0]), position: 0, point: stroke[0] };
+    }
+    const segmentLengths = [];
+    let totalLength = 0;
+    for (let index = 1; index < stroke.length; index += 1) {
+      const length = getDistance(stroke[index - 1], stroke[index]);
+      segmentLengths.push(length);
+      totalLength += length;
+    }
+    let elapsed = 0;
+    let best = { distance: Infinity, position: 0, point: null };
+    for (let index = 1; index < stroke.length; index += 1) {
+      const start = stroke[index - 1];
+      const end = stroke[index];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const lengthSquared = dx * dx + dy * dy;
+      const ratio = lengthSquared <= Number.EPSILON
+        ? 0
+        : Math.max(0, Math.min(1,
+          ((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared,
+        ));
+      const projected = { x: start.x + dx * ratio, y: start.y + dy * ratio };
+      const distance = getDistance(point, projected);
+      if (distance < best.distance) {
+        best = {
+          distance,
+          position: totalLength > 0
+            ? (elapsed + segmentLengths[index - 1] * ratio) / totalLength
+            : 0,
+          point: projected,
+        };
+      }
+      elapsed += segmentLengths[index - 1];
+    }
+    return best;
+  }
+
+  function getLineSegmentIntersection(a, b, c, d) {
+    const rx = b.x - a.x;
+    const ry = b.y - a.y;
+    const sx = d.x - c.x;
+    const sy = d.y - c.y;
+    const denominator = rx * sy - ry * sx;
+    if (Math.abs(denominator) < 1e-7) return null;
+    const qpx = c.x - a.x;
+    const qpy = c.y - a.y;
+    const t = (qpx * sy - qpy * sx) / denominator;
+    const u = (qpx * ry - qpy * rx) / denominator;
+    if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+    return { t, u };
+  }
+
+  function getStrokeClosestRelation(strokeA, strokeB) {
+    if (!Array.isArray(strokeA) || !Array.isArray(strokeB) ||
+        strokeA.length === 0 || strokeB.length === 0) {
+      return { distance: Infinity, positionA: 0, positionB: 0 };
+    }
+    let best = { distance: Infinity, positionA: 0, positionB: 0 };
+    const lengthA = Math.max(1, getStrokeLength(strokeA));
+    const lengthB = Math.max(1, getStrokeLength(strokeB));
+    const prefixA = [0];
+    const prefixB = [0];
+    for (let index = 1; index < strokeA.length; index += 1) {
+      prefixA.push(prefixA[index - 1] + getDistance(strokeA[index - 1], strokeA[index]));
+    }
+    for (let index = 1; index < strokeB.length; index += 1) {
+      prefixB.push(prefixB[index - 1] + getDistance(strokeB[index - 1], strokeB[index]));
+    }
+    for (let indexA = 1; indexA < strokeA.length; indexA += 1) {
+      const segmentLengthA = getDistance(strokeA[indexA - 1], strokeA[indexA]);
+      for (let indexB = 1; indexB < strokeB.length; indexB += 1) {
+        const intersection = getLineSegmentIntersection(
+          strokeA[indexA - 1], strokeA[indexA],
+          strokeB[indexB - 1], strokeB[indexB],
+        );
+        if (!intersection) continue;
+        const segmentLengthB = getDistance(strokeB[indexB - 1], strokeB[indexB]);
+        return {
+          distance: 0,
+          positionA: (prefixA[indexA - 1] + segmentLengthA * intersection.t) / lengthA,
+          positionB: (prefixB[indexB - 1] + segmentLengthB * intersection.u) / lengthB,
+        };
+      }
+    }
+    let elapsedA = 0;
+    strokeA.forEach((point, index) => {
+      if (index > 0) elapsedA += getDistance(strokeA[index - 1], point);
+      const projected = getStrokeProjection(point, strokeB);
+      if (projected.distance < best.distance) {
+        best = {
+          distance: projected.distance,
+          positionA: elapsedA / lengthA,
+          positionB: projected.position,
+        };
+      }
+    });
+    let elapsedB = 0;
+    strokeB.forEach((point, index) => {
+      if (index > 0) elapsedB += getDistance(strokeB[index - 1], point);
+      const projected = getStrokeProjection(point, strokeA);
+      if (projected.distance < best.distance) {
+        best = {
+          distance: projected.distance,
+          positionA: projected.position,
+          positionB: elapsedB / lengthB,
+        };
+      }
+    });
+    return best;
+  }
+
+  function getComponentData(startIndex, count) {
+    const strokes = state.strokes.slice(startIndex, startIndex + count);
+    if (strokes.length < count || strokes.some((stroke) => !Array.isArray(stroke) || stroke.length < 2)) {
+      return null;
+    }
+    const bounds = getStrokeGroupBounds(startIndex, count);
+    if (!bounds) {
+      return null;
+    }
+    return {
+      startIndex,
+      strokes,
+      bounds,
+      diagonal: Math.hypot(bounds.width, bounds.height),
+      geometries: strokes.map(getStrokeGeometry),
+    };
+  }
+
+  function createContrastiveDecision(status, details = {}, penalty = 0) {
+    return {
+      status,
+      hardReject: status === "competing",
+      penalty: status === "ambiguous" ? penalty : 0,
+      details,
+    };
+  }
+
+  function evaluateHorizontalLengthContrast(startIndex, upperOffset, lowerOffset, expected) {
+    const data = getComponentData(startIndex, Math.max(upperOffset, lowerOffset) + 1);
+    if (!data) {
+      return createContrastiveDecision("unavailable");
+    }
+    const upper = data.geometries[upperOffset];
+    const lower = data.geometries[lowerOffset];
+    if (!upper || !lower) {
+      return createContrastiveDecision("unavailable");
+    }
+    const upperLength = Math.max(upper.width, upper.length * 0.72);
+    const lowerLength = Math.max(lower.width, lower.length * 0.72);
+    const ratio = upperLength / Math.max(1, lowerLength);
+    const expectedPass = expected === "upper-longer" ? ratio >= 1.08 : ratio <= 0.92;
+    const competing = expected === "upper-longer" ? ratio <= 0.88 : ratio >= 1.12;
+    if (competing) {
+      return createContrastiveDecision("competing", { ratio, expected });
+    }
+    if (expectedPass) {
+      return createContrastiveDecision("expected", { ratio, expected });
+    }
+    return createContrastiveDecision("ambiguous", { ratio, expected }, 0.34);
+  }
+
+  function evaluateUshiAgainstUmaComponent(startIndex, count) {
+    const data = getComponentData(startIndex, count);
+    if (!data) {
+      return createContrastiveDecision("unavailable");
+    }
+    const verticalCandidates = data.geometries
+      .map((geometry, index) => ({ geometry, index }))
+      .filter(({ geometry }) => geometry && geometry.height >= geometry.width * 1.45)
+      .sort((a, b) => b.geometry.height - a.geometry.height);
+    const horizontalCandidates = data.geometries
+      .map((geometry, index) => ({ geometry, index }))
+      .filter(({ geometry }) => geometry && geometry.width >= geometry.height * 1.45)
+      .sort((a, b) => a.geometry.centerY - b.geometry.centerY);
+    const vertical = verticalCandidates[0];
+    const upper = horizontalCandidates[0];
+    if (!vertical || !upper) {
+      return createContrastiveDecision("unavailable");
+    }
+    const relation = getStrokeClosestRelation(
+      data.strokes[upper.index],
+      data.strokes[vertical.index],
+    );
+    const tolerance = Math.max(5, data.diagonal * 0.045);
+    const protrusionRatio = (upper.geometry.centerY - vertical.geometry.top) /
+      Math.max(1, data.bounds.height);
+    const touches = relation.distance <= tolerance;
+    const verticalContactPosition = relation.positionB;
+    const umaLike = touches
+      ? verticalContactPosition <= 0.075
+      : protrusionRatio <= 0.015;
+    const ushiLike = touches
+      ? verticalContactPosition >= 0.12
+      : protrusionRatio >= 0.07;
+    const details = {
+      distance: relation.distance,
+      verticalContactPosition,
+      protrusionRatio,
+    };
+    if (umaLike) return createContrastiveDecision("competing", details);
+    if (ushiLike) return createContrastiveDecision("expected", details);
+    return createContrastiveDecision("ambiguous", details, 0.38);
+  }
+
+  function evaluateYuuAgainstShinComponent(startIndex, count) {
+    const data = getComponentData(startIndex, count);
+    if (!data) {
+      return createContrastiveDecision("unavailable");
+    }
+    const verticals = data.geometries
+      .map((geometry, index) => ({ geometry, index }))
+      .filter(({ geometry }) => geometry && geometry.height >= geometry.width * 1.45)
+      .sort((a, b) => b.geometry.height - a.geometry.height);
+    const central = verticals.find(({ geometry }) =>
+      geometry.centerX >= data.bounds.left + data.bounds.width * 0.28 &&
+      geometry.centerX <= data.bounds.left + data.bounds.width * 0.72
+    ) || verticals[0];
+    if (!central) {
+      return createContrastiveDecision("unavailable");
+    }
+    const otherGeometries = data.geometries.filter((_, index) => index !== central.index).filter(Boolean);
+    if (otherGeometries.length === 0) {
+      return createContrastiveDecision("unavailable");
+    }
+    const boxBottom = Math.max(...otherGeometries.map((geometry) => geometry.bottom));
+    const belowRatio = (central.geometry.bottom - boxBottom) / Math.max(1, data.bounds.height);
+    if (belowRatio >= 0.075) {
+      return createContrastiveDecision("competing", { belowRatio });
+    }
+    if (belowRatio <= 0.025) {
+      return createContrastiveDecision("expected", { belowRatio });
+    }
+    return createContrastiveDecision("ambiguous", { belowRatio }, 0.32);
+  }
+
+  function isStartAttachedToStroke(stroke, target, tolerance, minPosition = 0.1, maxPosition = 0.9) {
+    if (!stroke?.[0]) return { pass: false, distance: Infinity, position: 0 };
+    const projection = getStrokeProjection(stroke[0], target);
+    return {
+      pass: projection.distance <= tolerance &&
+        projection.position >= minPosition && projection.position <= maxPosition,
+      distance: projection.distance,
+      position: projection.position,
+    };
+  }
+
+  function evaluateSakuComponentTopology(startIndex, count) {
+    const data = getComponentData(startIndex, count);
+    if (!data || data.strokes.length < 5) {
+      return createContrastiveDecision("unavailable");
+    }
+    const tolerance = Math.max(5, data.diagonal * 0.055);
+    const upperHorizontal = data.strokes[1];
+    const vertical = data.strokes[2];
+    const lowerA = data.strokes[3];
+    const lowerB = data.strokes[4];
+    const verticalFromUpper = isStartAttachedToStroke(vertical, upperHorizontal, tolerance, 0.12, 0.92);
+    const lowerAFromVertical = isStartAttachedToStroke(lowerA, vertical, tolerance, 0.12, 0.92);
+    const lowerBFromVertical = isStartAttachedToStroke(lowerB, vertical, tolerance, 0.12, 0.96);
+    const upperFromVertical = isStartAttachedToStroke(upperHorizontal, vertical, tolerance, 0.1, 0.9);
+    const details = {
+      verticalFromUpper,
+      lowerAFromVertical,
+      lowerBFromVertical,
+      upperFromVertical,
+    };
+    if (upperFromVertical.pass && !verticalFromUpper.pass) {
+      return createContrastiveDecision("competing", details);
+    }
+    if (!lowerAFromVertical.pass || !lowerBFromVertical.pass) {
+      return createContrastiveDecision("competing", details);
+    }
+    if (verticalFromUpper.pass) {
+      return createContrastiveDecision("expected", details);
+    }
+    return createContrastiveDecision("ambiguous", details, 0.42);
+  }
+
+  function evaluateBunComponentTopology(startIndex, count) {
+    const data = getComponentData(startIndex, count);
+    if (!data || data.strokes.length < 4) {
+      return createContrastiveDecision("unavailable");
+    }
+    const third = data.strokes[2];
+    const fourth = data.strokes[3];
+    const relation = getStrokeClosestRelation(third, fourth);
+    const tolerance = Math.max(5, data.diagonal * 0.045);
+    const interior = relation.positionA >= 0.13 && relation.positionA <= 0.9 &&
+      relation.positionB >= 0.13 && relation.positionB <= 0.9;
+    const startStartOnly = relation.positionA <= 0.1 && relation.positionB <= 0.1;
+    const details = { ...relation, tolerance, interior, startStartOnly };
+    if (relation.distance <= tolerance && interior) {
+      return createContrastiveDecision("expected", details);
+    }
+    if (startStartOnly || relation.distance > tolerance * 1.45) {
+      return createContrastiveDecision("competing", details);
+    }
+    return createContrastiveDecision("ambiguous", details, 0.45);
+  }
+
+  function evaluateEnnyouAgainstShinnyou() {
+    const source = state.strokes.filter((stroke) => Array.isArray(stroke) && stroke.length > 1);
+    if (source.length < 2) {
+      return createContrastiveDecision("unavailable");
+    }
+    const tail = source.slice(-3);
+    const points = tail.flat();
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    const bounds = {
+      left: Math.min(...xs), right: Math.max(...xs),
+      top: Math.min(...ys), bottom: Math.max(...ys),
+    };
+    bounds.width = Math.max(1, bounds.right - bounds.left);
+    bounds.height = Math.max(1, bounds.bottom - bounds.top);
+    const diagonal = Math.hypot(bounds.width, bounds.height);
+    const features = tail.map((stroke, index) => ({
+      index,
+      stroke,
+      geometry: getStrokeGeometry(stroke),
+    })).filter((item) => item.geometry);
+    const final = features[features.length - 1];
+    if (!final) return createContrastiveDecision("unavailable");
+    const longBottomSweep = final.geometry.width >= bounds.width * 0.42 &&
+      final.geometry.bottom >= bounds.top + bounds.height * 0.72;
+    const compactDot = features.slice(0, -1).find(({ geometry }) =>
+      geometry.length <= diagonal * 0.18 &&
+      geometry.width <= bounds.width * 0.2 &&
+      geometry.height <= bounds.height * 0.22 &&
+      geometry.centerY <= final.geometry.centerY &&
+      geometry.centerX <= final.geometry.centerX
+    );
+    const finalHasVerticalDescent = final.geometry.height >= bounds.height * 0.56;
+    const details = {
+      compactDot: Boolean(compactDot),
+      longBottomSweep,
+      finalHasVerticalDescent,
+      finalWidthRatio: final.geometry.width / bounds.width,
+      finalHeightRatio: final.geometry.height / bounds.height,
+    };
+    if (compactDot && longBottomSweep) {
+      return createContrastiveDecision("competing", details);
+    }
+    if (longBottomSweep && finalHasVerticalDescent) {
+      return createContrastiveDecision("expected", details);
+    }
+    return createContrastiveDecision("ambiguous", details, 0.4);
+  }
+
+  function evaluateContrastiveCandidateStructure(text) {
+    const failedRuleIds = [];
+    const ambiguousRuleIds = [];
+    const details = [];
+    let penalty = 0;
+    for (const rule of CONTRASTIVE_COMPONENT_RULES) {
+      if (!rule.applies(text)) continue;
+      const decision = rule.test();
+      details.push({ id: rule.id, ...decision });
+      if (decision?.hardReject) failedRuleIds.push(rule.id);
+      if (decision?.status === "ambiguous") ambiguousRuleIds.push(rule.id);
+      penalty += Number(decision?.penalty) || 0;
+    }
+    return {
+      pass: failedRuleIds.length === 0,
+      failedRuleIds,
+      ambiguousRuleIds,
+      penalty: Math.round(penalty * 1000) / 1000,
+      details,
+    };
   }
 
   function hasValidShitsuComponent(startIndex) {
@@ -11635,6 +12158,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       scorePenalty: 0,
       unknownStrokeCount: false,
       structure: evaluateRequiredCandidateStructure(text),
+      contrastiveStructure: evaluateContrastiveCandidateStructure(text),
     };
 
     if (!expectedRange) {
@@ -11645,8 +12169,15 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         isSingleHan &&
         strokeStats.rawCount >= 1 &&
         strokeStats.virtualCount >= 1 &&
-        result.structure.pass
+        result.structure.pass &&
+        result.contrastiveStructure.pass
       );
+      result.scorePenalty += result.contrastiveStructure.penalty;
+      if (!result.contrastiveStructure.pass) {
+        result.reasons.push(...result.contrastiveStructure.failedRuleIds.map(
+          (id) => `contrastive:${id}`,
+        ));
+      }
       result.unknownStrokeCount = isSingleHan;
       if (result.pass) {
         result.warnings.push("unknown-stroke-count");
@@ -11660,6 +12191,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (!result.structure.pass) {
       result.pass = false;
       result.reasons.push(...result.structure.failedRuleIds.map((id) => `structure:${id}`));
+    }
+
+    result.scorePenalty += result.contrastiveStructure.penalty;
+    if (!result.contrastiveStructure.pass) {
+      result.pass = false;
+      result.reasons.push(...result.contrastiveStructure.failedRuleIds.map(
+        (id) => `contrastive:${id}`,
+      ));
+    }
+    if (result.contrastiveStructure.ambiguousRuleIds.length > 0) {
+      result.warnings.push(...result.contrastiveStructure.ambiguousRuleIds.map(
+        (id) => `contrastive-ambiguous:${id}`,
+      ));
     }
 
     if (hasShinnyouChar(text) && !hasCompletedShinnyouSweep()) {
