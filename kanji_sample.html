@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.4.0" />
+    <meta name="application-version" content="1.5.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -280,29 +280,55 @@ button {
   min-height: 0;
   padding: clamp(6px, 1.1vw, 10px);
   display: grid;
-  place-items: center;
-  overflow: hidden;
+  place-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(198, 215, 200, 0.46) rgba(18, 34, 28, 0.28);
   border: 1px solid var(--line-soft);
   border-radius: calc(var(--radius) - 2px);
   background: rgba(18, 34, 28, 0.45);
 }
 
+.result-box::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+.result-box::-webkit-scrollbar-track {
+  background: rgba(18, 34, 28, 0.28);
+  border-radius: 999px;
+}
+
+.result-box::-webkit-scrollbar-thumb {
+  background: rgba(198, 215, 200, 0.46);
+  border-radius: 999px;
+}
+
 .slot-grid {
-  --slot-count: 1;
-  width: 100%;
+  --slot-count: 10;
+  width: max-content;
+  min-width: 100%;
   height: 100%;
-  display: grid;
-  grid-template-columns: repeat(var(--slot-count), minmax(0, 1fr));
-  gap: clamp(3px, 0.7vw, 7px);
+  display: flex;
+  flex-flow: row nowrap;
+  align-items: stretch;
+  gap: clamp(5px, 0.8vw, 8px);
+  scroll-snap-type: x proximity;
 }
 
 .character-slot {
   position: relative;
+  flex: 0 0 auto;
+  height: 100%;
+  aspect-ratio: 1 / 1;
   min-width: 0;
   min-height: 0;
   display: grid;
   place-items: center;
   overflow: hidden;
+  scroll-snap-align: nearest;
   border: 1px solid var(--line-soft);
   border-radius: clamp(6px, 1vw, 10px);
   background: rgba(18, 34, 28, 0.22);
@@ -311,10 +337,6 @@ button {
   font-size: clamp(1.45rem, 8vmin, 4.4rem);
   font-weight: 850;
   line-height: 1;
-}
-
-.result-box[data-mode="free"] .slot-grid {
-  grid-template-columns: minmax(0, 1fr);
 }
 
 .character-slot.is-free-slot {
@@ -672,14 +694,28 @@ input:focus-visible,
   min-height: 0;
 }
 
+.app[data-layout="vertical-wide"] .result-box,
+.app[data-layout="vertical-portable"] .result-box {
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 .app[data-layout="vertical-wide"] .slot-grid,
 .app[data-layout="vertical-portable"] .slot-grid {
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: repeat(var(--slot-count), minmax(0, 1fr));
+  width: 100%;
+  min-width: 0;
+  height: max-content;
+  min-height: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  scroll-snap-type: y proximity;
 }
 
 .app[data-layout="vertical-wide"] .character-slot,
 .app[data-layout="vertical-portable"] .character-slot {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1 / 1;
   font-size: clamp(1.4rem, 5.6vmin, 4rem);
 }
 
@@ -7754,6 +7790,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const STABILITY_MIN_CONFIRMATIONS = 2;
   const COMPLEX_STROKE_STABILITY_THRESHOLD = 12;
   const MAX_SESSION_QUESTIONS = 10;
+  const ANSWER_SLOT_COUNT = 10;
   const RESULT_REVEAL_INTERVAL_MS = 280;
   const STORAGE_KEYS = Object.freeze({
     settings: "digicanji.settings.v2",
@@ -8025,6 +8062,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     importedRecognitionCorpus: [],
     lastRecognitionReplayReport: null,
     recognitionModeOverride: "",
+    recognitionResponseKindOverride: "",
     isRecognitionReplay: false,
     lastLoggedRecognitionFingerprint: "",
     lastCandidateEvaluation: null,
@@ -8101,6 +8139,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return state.session[state.currentQuestionIndex]?.inputMode === "free";
   }
 
+  function getCurrentResponseKind() {
+    if (state.recognitionResponseKindOverride) {
+      return state.recognitionResponseKindOverride;
+    }
+    const item = state.session[state.currentQuestionIndex];
+    if (item?.question?.responseKind) {
+      return item.question.responseKind;
+    }
+    return isHiraganaOnlyText(item?.question?.answer || "") ? "reading" : "writing";
+  }
+
+  function isReadingResponse() {
+    return !isFreeMode() && getCurrentResponseKind() === "reading";
+  }
+
   function getVisibleSlotCount() {
     return Math.max(1, state.slots.length);
   }
@@ -8122,9 +8175,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function getLiveResultText() {
-    if (isFreeMode()) {
-      return state.slots[0]?.text || messages.empty;
-    }
     const chars = state.slots.map((record) => record.text || "□").join("");
     return chars || messages.empty;
   }
@@ -8143,6 +8193,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const slot = document.createElement("span");
       slot.className = "character-slot";
       slot.dataset.index = String(index);
+      slot.setAttribute("role", "button");
+      slot.setAttribute("tabindex", index === state.activeSlotIndex ? "0" : "-1");
+      slot.setAttribute("aria-label", `${index + 1}文字目${record.text ? `、${record.text}` : "、未入力"}`);
 
       if (isFreeMode()) {
         slot.classList.add("is-free-slot");
@@ -8150,6 +8203,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
       if (index === state.activeSlotIndex) {
         slot.classList.add("is-active");
+        slot.setAttribute("aria-current", "true");
       }
 
       if (record.text) {
@@ -8159,19 +8213,26 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         message.className = "slot-message";
         message.textContent = record.message;
         slot.append(message);
-      } else if (isFreeMode()) {
-        const label = document.createElement("span");
-        label.className = "free-slot-label";
-        label.textContent = "フリー";
-        slot.append(label);
       }
 
       grid.append(slot);
     }
 
     resultBox.append(grid);
-    resultBox.setAttribute("aria-label", getLiveResultText());
+    resultBox.setAttribute("aria-label", `10文字の認識欄。現在は${state.activeSlotIndex + 1}文字目。`);
     updateBusyIndicator();
+  }
+
+  function scrollActiveSlotIntoView({ behavior = "smooth" } = {}) {
+    const activeSlot = resultBox.querySelector(`.character-slot[data-index="${state.activeSlotIndex}"]`);
+    if (!activeSlot) {
+      return;
+    }
+    activeSlot.scrollIntoView({
+      behavior,
+      block: "nearest",
+      inline: "nearest",
+    });
   }
 
   function setResult(text, stateName = "result") {
@@ -9138,6 +9199,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       back: item.question?.back || "",
       expectedAnswer: item.question?.answer || "",
       inputMode: item.inputMode || (isFreeMode() ? "free" : "character"),
+      responseKind: item.question?.responseKind || getCurrentResponseKind(),
       activeSlotIndex: state.activeSlotIndex,
     };
   }
@@ -9415,6 +9477,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const records = extractRecognitionCorpusRecords(payload);
     const previousStrokes = state.strokes;
     const previousModeOverride = state.recognitionModeOverride;
+    const previousResponseKindOverride = state.recognitionResponseKindOverride;
     const previousReplayState = state.isRecognitionReplay;
     const results = [];
 
@@ -9425,6 +9488,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         state.recognitionModeOverride = record?.question?.inputMode === "free"
           ? "free"
           : "character";
+        state.recognitionResponseKindOverride = record?.question?.responseKind || (
+          isHiraganaOnlyText(getReplayExpectedText(record)) ? "reading" : "writing"
+        );
         const sourceGroups = getReplaySourceGroups(record);
         const strokeStats = record?.strokeStats &&
           Number.isFinite(record.strokeStats.rawCount) &&
@@ -9474,6 +9540,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     } finally {
       state.strokes = previousStrokes;
       state.recognitionModeOverride = previousModeOverride;
+      state.recognitionResponseKindOverride = previousResponseKindOverride;
       state.isRecognitionReplay = previousReplayState;
     }
 
@@ -9581,9 +9648,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     );
 
     const previousMode = state.recognitionModeOverride;
+    const previousResponseKind = state.recognitionResponseKindOverride;
     const previousStrokes = state.strokes;
     const previousReplay = state.isRecognitionReplay;
     try {
+      state.recognitionResponseKindOverride = "writing";
       state.recognitionModeOverride = "free";
       add(
         "katakana-candidates-normalize-to-hiragana",
@@ -9592,6 +9661,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       );
 
       state.recognitionModeOverride = "character";
+      state.recognitionResponseKindOverride = "reading";
+      const readingItem = createSessionItem({ answer: "かりる", responseKind: "reading" });
+      add(
+        "reading-uses-ten-character-slots",
+        readingItem.inputMode === "slots" && readingItem.slots.length === ANSWER_SLOT_COUNT,
+        { inputMode: readingItem.inputMode, slotCount: readingItem.slots.length },
+      );
+      add(
+        "reading-candidate-is-single-hiragana",
+        normalizeCandidateText("カ") === "か" &&
+          isAllowedCandidateForCurrentMode("か") &&
+          !isAllowedCandidateForCurrentMode("借"),
+        { normalized: normalizeCandidateText("カ") },
+      );
+      state.recognitionResponseKindOverride = "writing";
       state.isRecognitionReplay = true;
       state.strokes = [[{ x: 10, y: 10, t: 0 }, { x: 90, y: 10, t: 100 }]];
       add("cjk-extension-b-supported", isCjkIdeograph("𠮷"));
@@ -9862,6 +9946,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       );
     } finally {
       state.recognitionModeOverride = previousMode;
+      state.recognitionResponseKindOverride = previousResponseKind;
       state.strokes = previousStrokes;
       state.isRecognitionReplay = previousReplay;
     }
@@ -10000,9 +10085,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return "";
     }
 
-    if (isFreeMode()) {
+    if (isFreeMode() || isReadingResponse()) {
       text = katakanaToHiragana(text);
-    } else if (getCharacterLength(text) === 1) {
+    }
+    if (!isReadingResponse() && getCharacterLength(text) === 1) {
       text = EDUCATIONAL_GLYPH_NORMALIZATION[text] || text;
     }
 
@@ -10135,9 +10221,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function isAllowedCandidateForCurrentMode(text) {
-    return isFreeMode()
-      ? isHiraganaOnlyText(text)
-      : getCharacterLength(text) === 1;
+    if (isFreeMode()) {
+      return isHiraganaOnlyText(text);
+    }
+    if (isReadingResponse()) {
+      return getCharacterLength(text) === 1 && isHiraganaOnlyText(text);
+    }
+    return getCharacterLength(text) === 1;
   }
 
   function getStrokeTolerance(expectedCount, text) {
@@ -12057,7 +12147,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         ensembleEvaluation = nativeEvaluation;
 
         const shouldConsultGoogle =
-          isFreeMode() ||
           !isCandidateEvaluationDecisive(nativeEvaluation);
 
         if (shouldConsultGoogle) {
@@ -12220,6 +12309,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     drawAllStrokes();
     renderResultArea();
     updateActionButtons();
+    window.requestAnimationFrame(() => scrollActiveSlotIntoView({ behavior: "auto" }));
     setBusy(false);
 
     if (recognizeIfNeeded && hasMeaningfulInk() && !getActiveInputRecord().text) {
@@ -12294,9 +12384,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function updateActionButtons() {
     const count = getVisibleSlotCount();
     undoButton.disabled = state.strokes.length === 0;
-    slotPosition.textContent = isFreeMode()
-      ? "フリー"
-      : `${state.activeSlotIndex + 1} / ${count}`;
+    slotPosition.textContent = `${state.activeSlotIndex + 1} / ${count}`;
     slotPosition.dataset.atStart = state.activeSlotIndex <= 0 ? "true" : "false";
     slotPosition.dataset.atEnd = state.activeSlotIndex >= count - 1 ? "true" : "false";
   }
@@ -12361,7 +12449,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       back: String(back),
       rawAnswer: cleanRawAnswer,
       answer,
-      inputMode: isHiraganaOnlyText(answer) ? "free" : "slots",
+      inputMode: "slots",
+      responseKind: isHiraganaOnlyText(answer) ? "reading" : "writing",
       explanation: String(explanation).trim() || "解説は登録されていません。",
       totalAttempts: Math.max(0, Number(saved.totalAttempts) || 0),
       correctCount: Math.max(0, Number(saved.correctCount) || 0),
@@ -12390,14 +12479,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function createSessionItem(question) {
-    const inputMode = question.inputMode === "free" ? "free" : "slots";
-    const characters = Array.from(question.answer);
     return {
       question,
-      inputMode,
-      slots: inputMode === "free"
-        ? [createInputRecord()]
-        : characters.map(createInputRecord),
+      inputMode: "slots",
+      slots: Array.from({ length: ANSWER_SLOT_COUNT }, createInputRecord),
       activeSlotIndex: 0,
       answerText: "",
       isCorrect: false,
@@ -12405,12 +12490,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function getItemAnswer(item, placeholder = false) {
-    if (item.inputMode === "free") {
-      return item.slots[0]?.text || (placeholder ? "□" : "");
-    }
-    return item.slots
-      .map((record) => record.text || (placeholder ? "□" : ""))
+    const text = item.slots
+      .map((record) => record.text || "□")
       .join("");
+    return placeholder ? text : text.replace(/□+$/u, "");
   }
 
   function saveCurrentSessionState() {
@@ -13619,6 +13702,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (Number.isInteger(index)) {
       const delta = index - state.activeSlotIndex;
       moveSlot(delta);
+    }
+  });
+  resultBox.addEventListener("keydown", (event) => {
+    const slot = event.target.closest(".character-slot");
+    if (!slot || !["Enter", " "].includes(event.key)) {
+      return;
+    }
+    event.preventDefault();
+    const index = Number(slot.dataset.index);
+    if (Number.isInteger(index)) {
+      moveSlot(index - state.activeSlotIndex);
     }
   });
 
