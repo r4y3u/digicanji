@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.5.0" />
+    <meta name="application-version" content="1.6.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -7823,6 +7823,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const DECISIVE_SCORE_CHARACTER = 1.65;
   const DECISIVE_SCORE_FREE = 3.4;
   const DECISIVE_MARGIN = 0.85;
+  const GLYPH_SHAPE_GRID_SIZE = 48;
+  const GLYPH_SHAPE_PADDING = 4;
+  const GLYPH_SHAPE_MIN_POINTS = 12;
+  const GLYPH_SHAPE_CACHE_LIMIT = 384;
+  const GLYPH_SHAPE_COVERAGE_RADIUS = 2.55;
+  const GLYPH_SHAPE_SCORE_FLOOR = 0.055;
+  const GLYPH_SHAPE_HARD_SCORE = 0.16;
+  const GLYPH_SHAPE_WEAK_SCORE = 0.105;
+  const GLYPH_SHAPE_MIN_INK_COVERAGE = 0.70;
+  const GLYPH_SHAPE_MIN_GLYPH_COVERAGE = 0.58;
   const GOOGLE_NORMALIZATION_PADDING_RATIO = 0.08;
   const EDUCATIONAL_FONT_CANDIDATES = Object.freeze([
     "UD Digi Kyokasho N-R",
@@ -9149,12 +9159,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       });
     }
 
-    add(
-      "repair-split",
-      splitStrokesAtCredibleCorners(strokes, guide),
-      RECOGNITION_REPAIR_SPLIT_PENALTY,
-      "split-credible-corners",
-    );
+    // 一文字回答では、曲がりを別画として数えると「一画不足」を補完してしまう。
+    // 分割補正は従来の文字列フリーモードだけに限定し、学習用の一文字枠では
+    // 実際に筆を離した画数を優先する。
+    if (freeMode) {
+      add(
+        "repair-split",
+        splitStrokesAtCredibleCorners(strokes, guide),
+        RECOGNITION_REPAIR_SPLIT_PENALTY,
+        "split-credible-corners",
+      );
+    }
     add(
       "repair-merge",
       mergeCrediblyContinuousStrokes(strokes, guide),
@@ -9287,6 +9302,449 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       .map((name) => name === "sans-serif" ? name : `"${name}"`)
       .join(", ");
     return `${weight} ${fontSize}px "${primary}", ${fallbacks}`;
+  }
+
+  const glyphShapeModelCache = new Map();
+  let glyphInkShapeCache = { fingerprint: "", model: null };
+
+  function getMaskBounds(mask, width, height) {
+    let left = width;
+    let right = -1;
+    let top = height;
+    let bottom = -1;
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (!mask[y * width + x]) {
+          continue;
+        }
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+      }
+    }
+    return right >= left && bottom >= top
+      ? { left, right, top, bottom, width: right - left + 1, height: bottom - top + 1 }
+      : null;
+  }
+
+  function canvasAlphaToMask(sourceCanvas, size = GLYPH_SHAPE_GRID_SIZE) {
+    const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    if (!sourceContext) {
+      return null;
+    }
+    const sourceData = sourceContext.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height).data;
+    const sourceMask = new Uint8Array(sourceCanvas.width * sourceCanvas.height);
+    for (let index = 0; index < sourceMask.length; index += 1) {
+      sourceMask[index] = sourceData[index * 4 + 3] >= 24 ? 1 : 0;
+    }
+    const bounds = getMaskBounds(sourceMask, sourceCanvas.width, sourceCanvas.height);
+    if (!bounds) {
+      return null;
+    }
+
+    const targetCanvas = document.createElement("canvas");
+    targetCanvas.width = size;
+    targetCanvas.height = size;
+    const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
+    if (!targetContext) {
+      return null;
+    }
+    targetContext.clearRect(0, 0, size, size);
+    targetContext.imageSmoothingEnabled = true;
+    const available = size - GLYPH_SHAPE_PADDING * 2;
+    const scale = Math.min(available / bounds.width, available / bounds.height);
+    const targetWidth = Math.max(1, bounds.width * scale);
+    const targetHeight = Math.max(1, bounds.height * scale);
+    const targetX = (size - targetWidth) / 2;
+    const targetY = (size - targetHeight) / 2;
+    targetContext.drawImage(
+      sourceCanvas,
+      bounds.left,
+      bounds.top,
+      bounds.width,
+      bounds.height,
+      targetX,
+      targetY,
+      targetWidth,
+      targetHeight,
+    );
+    const data = targetContext.getImageData(0, 0, size, size).data;
+    const mask = new Uint8Array(size * size);
+    for (let index = 0; index < mask.length; index += 1) {
+      mask[index] = data[index * 4 + 3] >= 28 ? 1 : 0;
+    }
+    return mask;
+  }
+
+  function thinBinaryMask(input, width, height) {
+    const mask = new Uint8Array(input);
+    const marked = new Uint8Array(mask.length);
+    let changed = true;
+    let iterations = 0;
+    while (changed && iterations < 40) {
+      changed = false;
+      iterations += 1;
+      for (let phase = 0; phase < 2; phase += 1) {
+        marked.fill(0);
+        for (let y = 1; y < height - 1; y += 1) {
+          for (let x = 1; x < width - 1; x += 1) {
+            const index = y * width + x;
+            if (!mask[index]) {
+              continue;
+            }
+            const p2 = mask[index - width];
+            const p3 = mask[index - width + 1];
+            const p4 = mask[index + 1];
+            const p5 = mask[index + width + 1];
+            const p6 = mask[index + width];
+            const p7 = mask[index + width - 1];
+            const p8 = mask[index - 1];
+            const p9 = mask[index - width - 1];
+            const neighbors = [p2, p3, p4, p5, p6, p7, p8, p9];
+            const count = neighbors.reduce((sum, value) => sum + value, 0);
+            if (count < 2 || count > 6) {
+              continue;
+            }
+            let transitions = 0;
+            for (let neighborIndex = 0; neighborIndex < neighbors.length; neighborIndex += 1) {
+              if (!neighbors[neighborIndex] && neighbors[(neighborIndex + 1) % neighbors.length]) {
+                transitions += 1;
+              }
+            }
+            if (transitions !== 1) {
+              continue;
+            }
+            const phasePass = phase === 0
+              ? p2 * p4 * p6 === 0 && p4 * p6 * p8 === 0
+              : p2 * p4 * p8 === 0 && p2 * p6 * p8 === 0;
+            if (phasePass) {
+              marked[index] = 1;
+            }
+          }
+        }
+        for (let index = 0; index < mask.length; index += 1) {
+          if (marked[index]) {
+            mask[index] = 0;
+            changed = true;
+          }
+        }
+      }
+    }
+    return mask;
+  }
+
+  function dilateBinaryMask(mask, width, height) {
+    const output = new Uint8Array(mask.length);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        if (!mask[index]) {
+          continue;
+        }
+        for (let dy = -1; dy <= 1; dy += 1) {
+          for (let dx = -1; dx <= 1; dx += 1) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+              output[ny * width + nx] = 1;
+            }
+          }
+        }
+      }
+    }
+    return output;
+  }
+
+  function createChamferDistance(mask, width, height) {
+    const diagonal = Math.SQRT2;
+    const distance = new Float32Array(mask.length);
+    for (let index = 0; index < mask.length; index += 1) {
+      distance[index] = mask[index] ? 0 : 1e4;
+    }
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const index = y * width + x;
+        let value = distance[index];
+        if (x > 0) value = Math.min(value, distance[index - 1] + 1);
+        if (y > 0) value = Math.min(value, distance[index - width] + 1);
+        if (x > 0 && y > 0) value = Math.min(value, distance[index - width - 1] + diagonal);
+        if (x + 1 < width && y > 0) value = Math.min(value, distance[index - width + 1] + diagonal);
+        distance[index] = value;
+      }
+    }
+    for (let y = height - 1; y >= 0; y -= 1) {
+      for (let x = width - 1; x >= 0; x -= 1) {
+        const index = y * width + x;
+        let value = distance[index];
+        if (x + 1 < width) value = Math.min(value, distance[index + 1] + 1);
+        if (y + 1 < height) value = Math.min(value, distance[index + width] + 1);
+        if (x + 1 < width && y + 1 < height) value = Math.min(value, distance[index + width + 1] + diagonal);
+        if (x > 0 && y + 1 < height) value = Math.min(value, distance[index + width - 1] + diagonal);
+        distance[index] = value;
+      }
+    }
+    return distance;
+  }
+
+  function buildGlyphShapeModel(mask, width = GLYPH_SHAPE_GRID_SIZE, height = GLYPH_SHAPE_GRID_SIZE) {
+    if (!mask) {
+      return null;
+    }
+    const skeleton = thinBinaryMask(mask, width, height);
+    let skeletonCount = 0;
+    skeleton.forEach((value) => { skeletonCount += value; });
+    if (skeletonCount < 8) {
+      return null;
+    }
+    const dilated = dilateBinaryMask(skeleton, width, height);
+    const rowProjection = new Float32Array(height);
+    const columnProjection = new Float32Array(width);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (!skeleton[y * width + x]) {
+          continue;
+        }
+        rowProjection[y] += 1 / width;
+        columnProjection[x] += 1 / height;
+      }
+    }
+    const coarseSize = 6;
+    const coarse = new Float32Array(coarseSize * coarseSize);
+    for (let cellY = 0; cellY < coarseSize; cellY += 1) {
+      for (let cellX = 0; cellX < coarseSize; cellX += 1) {
+        const startX = Math.floor(cellX * width / coarseSize);
+        const endX = Math.floor((cellX + 1) * width / coarseSize);
+        const startY = Math.floor(cellY * height / coarseSize);
+        const endY = Math.floor((cellY + 1) * height / coarseSize);
+        let filled = 0;
+        let total = 0;
+        for (let y = startY; y < endY; y += 1) {
+          for (let x = startX; x < endX; x += 1) {
+            filled += dilated[y * width + x];
+            total += 1;
+          }
+        }
+        coarse[cellY * coarseSize + cellX] = total ? filled / total : 0;
+      }
+    }
+    return {
+      width,
+      height,
+      skeleton,
+      skeletonCount,
+      distance: createChamferDistance(skeleton, width, height),
+      rowProjection,
+      columnProjection,
+      coarse,
+    };
+  }
+
+  function compareGlyphShapeModels(ink, glyph) {
+    if (!ink || !glyph || ink.width !== glyph.width || ink.height !== glyph.height) {
+      return null;
+    }
+    const size = ink.width;
+    let inkDistance = 0;
+    let glyphDistance = 0;
+    let inkCovered = 0;
+    let glyphCovered = 0;
+    for (let index = 0; index < ink.skeleton.length; index += 1) {
+      if (ink.skeleton[index]) {
+        const distance = glyph.distance[index];
+        inkDistance += distance;
+        if (distance <= GLYPH_SHAPE_COVERAGE_RADIUS) inkCovered += 1;
+      }
+      if (glyph.skeleton[index]) {
+        const distance = ink.distance[index];
+        glyphDistance += distance;
+        if (distance <= GLYPH_SHAPE_COVERAGE_RADIUS) glyphCovered += 1;
+      }
+    }
+    let coarseDifference = 0;
+    for (let index = 0; index < ink.coarse.length; index += 1) {
+      coarseDifference += Math.abs(ink.coarse[index] - glyph.coarse[index]);
+    }
+    coarseDifference /= Math.max(1, ink.coarse.length);
+    let projectionDifference = 0;
+    for (let index = 0; index < ink.rowProjection.length; index += 1) {
+      projectionDifference += Math.abs(ink.rowProjection[index] - glyph.rowProjection[index]);
+    }
+    for (let index = 0; index < ink.columnProjection.length; index += 1) {
+      projectionDifference += Math.abs(ink.columnProjection[index] - glyph.columnProjection[index]);
+    }
+    projectionDifference /= Math.max(1, ink.rowProjection.length + ink.columnProjection.length);
+    const inkToGlyph = inkDistance / Math.max(1, ink.skeletonCount) / size;
+    const glyphToInk = glyphDistance / Math.max(1, glyph.skeletonCount) / size;
+    const inkCoverage = inkCovered / Math.max(1, ink.skeletonCount);
+    const glyphCoverage = glyphCovered / Math.max(1, glyph.skeletonCount);
+    const score =
+      inkToGlyph * 0.45 +
+      glyphToInk * 0.55 +
+      coarseDifference * 0.35 +
+      projectionDifference * 0.2;
+    return {
+      score,
+      inkToGlyph,
+      glyphToInk,
+      inkCoverage,
+      glyphCoverage,
+      coarseDifference,
+      projectionDifference,
+    };
+  }
+
+  function getGlyphInkFingerprint(strokes) {
+    return (Array.isArray(strokes) ? strokes : []).map((stroke) => {
+      const first = stroke?.[0] || { x: 0, y: 0 };
+      const middle = stroke?.[Math.floor((stroke?.length || 1) / 2)] || first;
+      const last = stroke?.[(stroke?.length || 1) - 1] || first;
+      return [
+        stroke?.length || 0,
+        Math.round(first.x), Math.round(first.y),
+        Math.round(middle.x), Math.round(middle.y),
+        Math.round(last.x), Math.round(last.y),
+      ].join(":");
+    }).join("|");
+  }
+
+  function getCurrentInkGlyphShapeModel(strokes = state.strokes) {
+    const source = (Array.isArray(strokes) ? strokes : []).filter((stroke) => stroke?.length > 1);
+    const pointCount = source.reduce((sum, stroke) => sum + stroke.length, 0);
+    if (pointCount < GLYPH_SHAPE_MIN_POINTS) {
+      return null;
+    }
+    const fingerprint = getGlyphInkFingerprint(source);
+    if (glyphInkShapeCache.fingerprint === fingerprint) {
+      return glyphInkShapeCache.model;
+    }
+    const allPoints = source.flat();
+    const xs = allPoints.map((point) => point.x);
+    const ys = allPoints.map((point) => point.y);
+    const left = Math.min(...xs);
+    const right = Math.max(...xs);
+    const top = Math.min(...ys);
+    const bottom = Math.max(...ys);
+    const width = Math.max(1, right - left);
+    const height = Math.max(1, bottom - top);
+    if (width < 8 || height < 8) {
+      return null;
+    }
+    const size = GLYPH_SHAPE_GRID_SIZE;
+    const available = size - GLYPH_SHAPE_PADDING * 2;
+    const scale = Math.min(available / width, available / height);
+    const offsetX = (size - width * scale) / 2 - left * scale;
+    const offsetY = (size - height * scale) / 2 - top * scale;
+    const shapeCanvas = document.createElement("canvas");
+    shapeCanvas.width = size;
+    shapeCanvas.height = size;
+    const context = shapeCanvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    context.clearRect(0, 0, size, size);
+    context.strokeStyle = "#fff";
+    context.fillStyle = "#fff";
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.lineWidth = 2.2;
+    source.forEach((stroke) => {
+      context.beginPath();
+      stroke.forEach((point, index) => {
+        const x = point.x * scale + offsetX;
+        const y = point.y * scale + offsetY;
+        if (index === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      });
+      context.stroke();
+    });
+    const mask = canvasAlphaToMask(shapeCanvas, size);
+    const model = buildGlyphShapeModel(mask, size, size);
+    glyphInkShapeCache = { fingerprint, model };
+    return model;
+  }
+
+  function getCandidateGlyphShapeModel(text) {
+    const fontKey = resolvedEducationalFontName || EDUCATIONAL_FONT_CANDIDATES[0] || "fallback";
+    const cacheKey = `${fontKey}:${text}`;
+    if (glyphShapeModelCache.has(cacheKey)) {
+      return glyphShapeModelCache.get(cacheKey);
+    }
+    const sourceSize = 160;
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = sourceSize;
+    sourceCanvas.height = sourceSize;
+    const context = sourceCanvas.getContext("2d", { willReadFrequently: true });
+    if (!context) {
+      return null;
+    }
+    context.clearRect(0, 0, sourceSize, sourceSize);
+    context.fillStyle = "#fff";
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = getEducationalCanvasFont(126, 400);
+    context.fillText(text, sourceSize / 2, sourceSize / 2 + 3);
+    const model = buildGlyphShapeModel(canvasAlphaToMask(sourceCanvas));
+    glyphShapeModelCache.set(cacheKey, model);
+    if (glyphShapeModelCache.size > GLYPH_SHAPE_CACHE_LIMIT) {
+      const oldest = glyphShapeModelCache.keys().next().value;
+      glyphShapeModelCache.delete(oldest);
+    }
+    return model;
+  }
+
+  function evaluateCandidateGlyphShape(text, strokes = state.strokes) {
+    if (
+      isFreeMode() ||
+      getCharacterLength(text) !== 1 ||
+      !isCjkIdeograph(text)
+    ) {
+      return { available: false, hardReject: false, penalty: 0 };
+    }
+    const ink = getCurrentInkGlyphShapeModel(strokes);
+    const glyph = getCandidateGlyphShapeModel(text);
+    const comparison = compareGlyphShapeModels(ink, glyph);
+    if (!comparison) {
+      return { available: false, hardReject: false, penalty: 0 };
+    }
+    const expectedCount = getCandidateStrokeCount(text) || 8;
+    const complexityAllowance = Math.min(0.028, Math.max(0, expectedCount - 8) * 0.0024);
+    const hardScore = GLYPH_SHAPE_HARD_SCORE + complexityAllowance;
+    const weakScore = GLYPH_SHAPE_WEAK_SCORE + complexityAllowance * 0.55;
+    const minInkCoverage = GLYPH_SHAPE_MIN_INK_COVERAGE - Math.min(0.06, complexityAllowance * 1.6);
+    const minGlyphCoverage = GLYPH_SHAPE_MIN_GLYPH_COVERAGE - Math.min(0.08, complexityAllowance * 2.1);
+    const hardReject =
+      comparison.score >= hardScore ||
+      (
+        comparison.score >= weakScore &&
+        comparison.inkCoverage < minInkCoverage &&
+        comparison.glyphCoverage < minGlyphCoverage
+      ) ||
+      (
+        comparison.score >= weakScore + 0.008 &&
+        comparison.glyphCoverage < minGlyphCoverage - 0.07
+      );
+    const penalty = Math.min(
+      2.6,
+      Math.max(0, comparison.score - GLYPH_SHAPE_SCORE_FLOOR) * 10 +
+      Math.max(0, 0.78 - comparison.inkCoverage) * 0.9 +
+      Math.max(0, 0.70 - comparison.glyphCoverage) * 1.0,
+    );
+    const rounded = Object.fromEntries(
+      Object.entries(comparison).map(([key, value]) => [key, Math.round(value * 1000) / 1000]),
+    );
+    return {
+      available: true,
+      hardReject,
+      penalty: Math.round(penalty * 1000) / 1000,
+      thresholds: {
+        hardScore: Math.round(hardScore * 1000) / 1000,
+        weakScore: Math.round(weakScore * 1000) / 1000,
+        minInkCoverage: Math.round(minInkCoverage * 1000) / 1000,
+        minGlyphCoverage: Math.round(minGlyphCoverage * 1000) / 1000,
+      },
+      ...rounded,
+    };
   }
 
   function getSerializableInkBounds() {
@@ -9951,6 +10409,49 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       state.isRecognitionReplay = previousReplay;
     }
 
+    add(
+      "character-mode-requires-physical-stroke-count",
+      getAllowedRawShortfall(12, "結") === 0 && getAllowedRawShortfall(8, "味") === 0,
+    );
+    const characterRepairKinds = createRecognitionRepairVariants([
+      [
+        { x: 20, y: 30, t: 0 },
+        { x: 100, y: 30, t: 10 },
+        { x: 100, y: 120, t: 20 },
+      ],
+      [{ x: 100, y: 122, t: 21 }, { x: 160, y: 122, t: 30 }],
+    ], { width: 200, height: 200 }, { freeMode: false }).map((item) => item.variant);
+    add(
+      "character-mode-does-not-split-bent-strokes",
+      !characterRepairKinds.includes("repair-split"),
+      characterRepairKinds,
+    );
+    const glyphSelfModel = getCandidateGlyphShapeModel("油");
+    const glyphSelfComparison = compareGlyphShapeModels(glyphSelfModel, glyphSelfModel);
+    if (glyphSelfModel) {
+      const protrudingMask = new Uint8Array(glyphSelfModel.skeleton);
+      const centerX = Math.floor(GLYPH_SHAPE_GRID_SIZE * 0.67);
+      for (let y = Math.floor(GLYPH_SHAPE_GRID_SIZE * 0.72); y < GLYPH_SHAPE_GRID_SIZE - 2; y += 1) {
+        protrudingMask[y * GLYPH_SHAPE_GRID_SIZE + centerX] = 1;
+      }
+      const protrudingModel = buildGlyphShapeModel(
+        dilateBinaryMask(protrudingMask, GLYPH_SHAPE_GRID_SIZE, GLYPH_SHAPE_GRID_SIZE),
+      );
+      const protrudingComparison = compareGlyphShapeModels(protrudingModel, glyphSelfModel);
+      add(
+        "glyph-shape-model-penalizes-extra-protrusion",
+        Boolean(
+          glyphSelfComparison &&
+          protrudingComparison &&
+          glyphSelfComparison.score < 0.01 &&
+          protrudingComparison.score > glyphSelfComparison.score + 0.004
+        ),
+        { glyphSelfComparison, protrudingComparison },
+      );
+    } else {
+      add("glyph-shape-model-penalizes-extra-protrusion", false, "glyph unavailable");
+    }
+
     const ids = STRUCTURAL_COMPONENT_RULES.map((rule) => rule.id);
     add("structural-rule-ids-unique", new Set(ids).size === ids.length, ids);
     add("educational-kana-vector-exceptions-removed", Object.keys(EDUCATIONAL_KANA_PATHS).length === 0);
@@ -9977,6 +10478,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     replay: replayRecognitionCorpus,
     getLastReplayReport: () => state.lastRecognitionReplayReport,
     getEducationalFontDiagnostics,
+    evaluateGlyphShape: (text) => evaluateCandidateGlyphShape(String(text || "")),
     runSelfTests: runRecognitionSelfTests,
   });
 
@@ -11111,17 +11613,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return horizontal && verticalishMarks >= 2;
   }
 
-  function getAllowedRawShortfall(expectedCount, text) {
-    if (isKanaOnly(text) || isFreeMode()) {
-      // ひらがな文は一画不足を許すと、濁点・促音・別字を存在しない筆画から
-      // 補ってしまうため、実画数を厳密に合わせる。
-      return 0;
-    }
-
-    // 文字枠モードは学習用途なので、単なる曲線や崩れを「つなげ書き」と数えない。
-    // 明確な折れが存在する場合に限り、一画までの結合を認める。
-    const joinedCorners = countCredibleJoinedCorners();
-    return joinedCorners >= 1 && expectedCount >= 5 ? 1 : 0;
+  function getAllowedRawShortfall() {
+    // 一文字枠では標準的な筆の上げ下げを学習対象にする。
+    // 任意の曲がりを「結合された二画」とみなすと、別の場所にある不足画まで
+    // 補ってしまうため、漢字・かなとも実画数の不足は許容しない。
+    // 偶発的な筆離れは repair-merge、微小タップは repair-tap-filter で救済する。
+    return 0;
   }
 
   function getAllowedRawOverage() {
@@ -11225,6 +11722,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (strokeStats.rawCount > expectedCount + allowedRawOverage) {
       result.pass = false;
       result.reasons.push("too-many-physical-strokes");
+    }
+
+    // 画数・基本部品を通過した候補だけ字形比較へ進める。
+    // 入力途中の候補を毎回描画比較しないことで、処理量と消費電力も抑える。
+    if (result.pass) {
+      result.glyphShape = evaluateCandidateGlyphShape(text);
+      if (result.glyphShape.available) {
+        result.scorePenalty += result.glyphShape.penalty;
+        if (result.glyphShape.hardReject) {
+          result.pass = false;
+          result.reasons.push("glyph-shape-mismatch");
+        }
+      }
     }
 
     return result;
@@ -11706,6 +12216,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         scorePenalty: 0,
         expectedRange: null,
         structure: null,
+        glyphShape: null,
         unknownStrokeCount: false,
       };
 
@@ -11776,6 +12287,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         warnings: compatibility.warnings || [],
         expectedRange: compatibility.expectedRange,
         structure: compatibility.structure,
+        glyphShape: compatibility.glyphShape || null,
         unknownStrokeCount: Boolean(compatibility.unknownStrokeCount),
         spatial,
         memberships,
