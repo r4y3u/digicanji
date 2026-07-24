@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.7.0" />
+    <meta name="application-version" content="1.9.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -7801,12 +7801,23 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     "鱸": 27,
   });
 
-  // ひらがなは、活字の筆画数と学校で用いる手書き字形の筆画数が一致しない場合がある。
-  // 文字ごとの例外表ではなく、語全体の長さと基準画数から短縮可能量を算出する。
-  // 濁点・半濁点は省略可能量に含めず、実際の追加筆画を必須とする。
-  const KANA_STROKE_SHORTFALL_RATIO = 0.26;
-  const KANA_STROKE_SHORTFALL_PER_CHAR = 0.72;
-  const KANA_STROKE_SOFT_MARGIN = 1;
+  // 活字輪郭から得た画数ではなく、学校で扱う標準的な手書きの筆の上げ下げを使う。
+  // 一部のひらがなだけを例外処理するのではなく、基本字・小書き字を一式定義し、
+  // 濁点・半濁点は Unicode 分解後に追加画として共通計算する。
+  const EDUCATIONAL_HIRAGANA_STROKE_COUNTS = Object.freeze({
+    "ぁ": 3, "あ": 3, "ぃ": 2, "い": 2, "ぅ": 2, "う": 2,
+    "ぇ": 2, "え": 2, "ぉ": 3, "お": 3,
+    "ゕ": 3, "か": 3, "き": 4, "く": 1, "ゖ": 3, "け": 3, "こ": 2,
+    "さ": 3, "し": 1, "す": 2, "せ": 3, "そ": 1,
+    "た": 4, "ち": 2, "っ": 1, "つ": 1, "て": 1, "と": 2,
+    "な": 4, "に": 3, "ぬ": 2, "ね": 2, "の": 1,
+    "は": 3, "ひ": 1, "ふ": 4, "へ": 1, "ほ": 4,
+    "ま": 3, "み": 2, "む": 3, "め": 2, "も": 3,
+    "ゃ": 3, "や": 3, "ゅ": 2, "ゆ": 2, "ょ": 2, "よ": 2,
+    "ら": 2, "り": 2, "る": 1, "れ": 2, "ろ": 1,
+    "ゎ": 2, "わ": 2, "ゐ": 3, "ゑ": 2, "を": 3, "ん": 1,
+    "ゝ": 1, "ゞ": 3, "ー": 1,
+  });
   const COMBINING_DAKUTEN = "゙";
   const COMBINING_HANDAKUTEN = "゚";
   const SMALL_KANA_PATTERN = /^[ぁぃぅぇぉゃゅょっゎァィゥェォャュョッヮヵヶ]$/u;
@@ -7870,6 +7881,23 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     "齊": "斉",
     "齋": "斎",
   });
+
+  // 単独の手書きでは、文字種が違っても同じ骨格になり得る組合せがある。
+  // 認識結果自体は書き換えず、採点時だけ「別スクリプトかつ視覚的に弁別不能」な場合を同値とする。
+  // 既知の安定組は端末フォント差に備えたフォールバックであり、一般判定は後段の字体比較で行う。
+  const ANSWER_VISUAL_EQUIVALENCE_GROUPS = Object.freeze([
+    Object.freeze(["一", "ー"]),
+    Object.freeze(["二", "ニ"]),
+    Object.freeze(["八", "ハ"]),
+    Object.freeze(["力", "カ"]),
+    Object.freeze(["口", "ロ"]),
+    Object.freeze(["工", "エ"]),
+    Object.freeze(["卜", "ト"]),
+  ]);
+  const CROSS_SCRIPT_EQUIVALENCE_MAX_SCORE = 0.03;
+  const CROSS_SCRIPT_EQUIVALENCE_MIN_COVERAGE = 0.90;
+  const CROSS_SCRIPT_EQUIVALENCE_MAX_COARSE_DIFFERENCE = 0.095;
+  const CROSS_SCRIPT_EQUIVALENCE_MAX_PROJECTION_DIFFERENCE = 0.09;
 
   const STRUCTURAL_ALTERNATIVE_RULES = Object.freeze([
     {
@@ -7971,6 +7999,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const BUN_COMPONENT_PREFIX_CHARS = new Set(Array.from("文対斉斎"));
   const BUN_COMPONENT_SUFFIX_CHARS = new Set(Array.from("紋蚊雯"));
   const ENNYOU_COMPONENT_CHARS = new Set(Array.from("建健廷庭延誕"));
+  const SEN_COMPONENT_SUFFIX_CHARS = new Set(Array.from("残浅桟銭践賎"));
+
+  // 運筆方向の規則は文字ごとの分岐ではなく、同じ点画骨格を共有する部品族へ登録する。
+  // 各規則は「部品の筆画範囲」と「その中の払いの方向」だけを宣言し、共通評価器を使う。
+  const GE_COMPONENT_SUFFIX_CHARS = new Set(Array.from("戈伐戦戯"));
+  const GENG_COMPONENT_SUFFIX_CHARS = new Set(Array.from("更便硬梗哽鯁"));
+  const LI_COMPONENT_SUFFIX_CHARS = new Set(Array.from("吏使"));
+  const ZHANG_COMPONENT_SUFFIX_CHARS = new Set(Array.from("丈杖"));
+  const SHI_COMPONENT_SUFFIX_CHARS = new Set(Array.from("史駛"));
+  const JUE_COMPONENT_SUFFIX_CHARS = new Set(Array.from("夬決快抉訣缺"));
+  const JIAO_COMPONENT_SUFFIX_CHARS = new Set(Array.from("交校絞較咬狡佼蛟"));
+  const JIAO_COMPONENT_PREFIX_CHARS = new Set(Array.from("郊効"));
+  const FU_COMPONENT_PREFIX_CHARS = new Set(Array.from("父斧釜爺"));
 
   const CONTRASTIVE_COMPONENT_RULES = Object.freeze([
     {
@@ -8028,6 +8069,102 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       id: "ennyou-not-shinnyou",
       applies: (text) => ENNYOU_COMPONENT_CHARS.has(text),
       test: evaluateEnnyouAgainstShinnyou,
+    },
+    {
+      id: "direction-sen-falling-pair",
+      applies: (text) => SEN_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 6), 6,
+        [{ offset: 3, direction: "down-left" }, { offset: 4, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-ge-falling-pair",
+      applies: (text) => GE_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 4), 4,
+        [{ offset: 1, direction: "down-right" }, { offset: 2, direction: "down-left" }],
+      ),
+    },
+    {
+      id: "direction-geng-falling-pair",
+      applies: (text) => GENG_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 7), 7,
+        [{ offset: 5, direction: "down-left" }, { offset: 6, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-li-falling-pair",
+      applies: (text) => LI_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 6), 6,
+        [{ offset: 4, direction: "down-left" }, { offset: 5, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-zhang-falling-pair",
+      applies: (text) => ZHANG_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 3), 3,
+        [{ offset: 1, direction: "down-left" }, { offset: 2, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-shi-falling-pair",
+      applies: (text) => SHI_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 5), 5,
+        [{ offset: 3, direction: "down-left" }, { offset: 4, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-jue-falling-pair",
+      applies: (text) => JUE_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 4), 4,
+        [{ offset: 2, direction: "down-left" }, { offset: 3, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-bun-falling-pair-prefix",
+      applies: (text) => BUN_COMPONENT_PREFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        0, 4,
+        [{ offset: 2, direction: "down-left" }, { offset: 3, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-bun-falling-pair-suffix",
+      applies: (text) => BUN_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 4), 4,
+        [{ offset: 2, direction: "down-left" }, { offset: 3, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-jiao-falling-pair-suffix",
+      applies: (text) => JIAO_COMPONENT_SUFFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        Math.max(0, state.strokes.length - 6), 6,
+        [{ offset: 4, direction: "down-left" }, { offset: 5, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-jiao-falling-pair-prefix",
+      applies: (text) => JIAO_COMPONENT_PREFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        0, 6,
+        [{ offset: 4, direction: "down-left" }, { offset: 5, direction: "down-right" }],
+      ),
+    },
+    {
+      id: "direction-fu-falling-pair-prefix",
+      applies: (text) => FU_COMPONENT_PREFIX_CHARS.has(text),
+      test: () => evaluateDirectionalStrokeSignature(
+        0, 4,
+        [{ offset: 2, direction: "down-left" }, { offset: 3, direction: "down-right" }],
+      ),
     },
   ]);
 
@@ -9766,6 +9903,107 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return model;
   }
 
+  function getStrokeSupportAgainstGlyph(stroke, glyph, alignmentBounds) {
+    if (!stroke?.length || !glyph || !alignmentBounds) {
+      return null;
+    }
+    const size = glyph.width;
+    const available = size - GLYPH_SHAPE_PADDING * 2;
+    const scale = Math.min(
+      available / Math.max(1, alignmentBounds.width),
+      available / Math.max(1, alignmentBounds.height),
+    );
+    const offsetX = (size - alignmentBounds.width * scale) / 2 - alignmentBounds.left * scale;
+    const offsetY = (size - alignmentBounds.height * scale) / 2 - alignmentBounds.top * scale;
+    const sampled = compressStrokeForRecognition(stroke);
+    let distanceTotal = 0;
+    let covered = 0;
+    let outside = 0;
+    sampled.forEach((point) => {
+      const x = Math.round(point.x * scale + offsetX);
+      const y = Math.round(point.y * scale + offsetY);
+      if (x < 0 || x >= size || y < 0 || y >= size) {
+        outside += 1;
+        distanceTotal += size;
+        return;
+      }
+      const distance = glyph.distance[y * size + x];
+      distanceTotal += distance;
+      if (distance <= GLYPH_SHAPE_COVERAGE_RADIUS + 0.9) {
+        covered += 1;
+      }
+    });
+    const count = Math.max(1, sampled.length);
+    return {
+      coverage: covered / count,
+      outsideRatio: outside / count,
+      meanDistance: distanceTotal / count / size,
+    };
+  }
+
+  function evaluateDisplacedStrokeEvidence(strokes, glyph, baselineComparison) {
+    const source = (Array.isArray(strokes) ? strokes : [])
+      .filter((stroke) => Array.isArray(stroke) && stroke.length > 1);
+    if (source.length < 4 || !glyph || !baselineComparison) {
+      return { available: false, hardReject: false, penalty: 0, suspects: [] };
+    }
+
+    const lengths = source.map(getStrokeLength);
+    const totalLength = lengths.reduce((sum, value) => sum + value, 0);
+    const minimumLength = Math.max(16, totalLength * 0.035);
+    const suspects = [];
+
+    source.forEach((stroke, index) => {
+      const length = lengths[index];
+      if (length < minimumLength) {
+        return;
+      }
+      const remaining = source.filter((_, strokeIndex) => strokeIndex !== index);
+      const alignmentBounds = getStrokesBounds(remaining);
+      const omittedInk = getCurrentInkGlyphShapeModel(remaining);
+      const omittedComparison = compareGlyphShapeModels(omittedInk, glyph);
+      const support = getStrokeSupportAgainstGlyph(stroke, glyph, alignmentBounds);
+      if (!support || !omittedComparison) {
+        return;
+      }
+      const lengthRatio = length / Math.max(1, totalLength);
+      const improvement = baselineComparison.score - omittedComparison.score;
+      const severity =
+        Math.max(0, 0.48 - support.coverage) * 2.2 +
+        Math.max(0, support.meanDistance - 0.065) * 6 +
+        Math.max(0, support.outsideRatio - 0.08) * 1.8 +
+        Math.max(0, improvement - 0.006) * 12;
+      if (severity > 0.18) {
+        suspects.push({ index, lengthRatio, improvement, severity, ...support });
+      }
+    });
+
+    suspects.sort((a, b) => b.severity - a.severity);
+    const strongest = suspects[0] || null;
+    const hardReject = Boolean(
+      strongest &&
+      strongest.lengthRatio >= 0.045 &&
+      strongest.coverage < 0.24 &&
+      strongest.meanDistance > 0.085 &&
+      (strongest.improvement > 0.01 || strongest.outsideRatio > 0.22)
+    );
+    const penalty = strongest
+      ? Math.min(1.9, strongest.severity * Math.min(1.4, strongest.lengthRatio * 8))
+      : 0;
+    const roundedSuspects = suspects.slice(0, 3).map((item) => Object.fromEntries(
+      Object.entries(item).map(([key, value]) => [
+        key,
+        Number.isFinite(value) ? Math.round(value * 1000) / 1000 : value,
+      ]),
+    ));
+    return {
+      available: true,
+      hardReject,
+      penalty: Math.round(penalty * 1000) / 1000,
+      suspects: roundedSuspects,
+    };
+  }
+
   function evaluateCandidateGlyphShape(text, strokes = state.strokes) {
     if (
       isFreeMode() ||
@@ -9796,19 +10034,22 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       ) ||
       comparison.inkCoverage < 0.34 ||
       comparison.glyphCoverage < 0.3;
+    const displacedStroke = evaluateDisplacedStrokeEvidence(strokes, glyph, comparison);
     const penalty = Math.min(
-      2.6,
+      3.4,
       Math.max(0, comparison.score - GLYPH_SHAPE_SCORE_FLOOR) * 10 +
       Math.max(0, 0.78 - comparison.inkCoverage) * 0.9 +
-      Math.max(0, 0.70 - comparison.glyphCoverage) * 1.0,
+      Math.max(0, 0.70 - comparison.glyphCoverage) * 1.0 +
+      displacedStroke.penalty,
     );
     const rounded = Object.fromEntries(
       Object.entries(comparison).map(([key, value]) => [key, Math.round(value * 1000) / 1000]),
     );
     return {
       available: true,
-      hardReject,
+      hardReject: hardReject || displacedStroke.hardReject,
       penalty: Math.round(penalty * 1000) / 1000,
+      displacedStroke,
       thresholds: {
         hardScore: Math.round(hardScore * 1000) / 1000,
         weakScore: Math.round(weakScore * 1000) / 1000,
@@ -10164,10 +10405,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       };
     };
 
-    const kyoryoku = containsStrokeCount("きょうりょく", 12);
-    add("generic-kana-range-kyoryoku", kyoryoku.pass, kyoryoku.range);
+    const kyoryoku = containsStrokeCount("きょうりょく", 13);
+    add("educational-kana-count-kyoryoku", kyoryoku.pass, kyoryoku.range);
     const aratameru = containsStrokeCount("あらためる", 12);
-    add("generic-kana-range-aratameru", aratameru.pass, aratameru.range);
+    add("educational-kana-count-aratameru", aratameru.pass, aratameru.range);
+    const commonKanaCounts = { "る": 1, "お": 3, "な": 4, "み": 2, "め": 2 };
+    add(
+      "educational-single-kana-counts",
+      Object.entries(commonKanaCounts).every(([char, count]) => {
+        const profile = getKanaStrokeProfile(char);
+        return profile?.min === count && profile?.max === count;
+      }),
+      Object.fromEntries(Object.keys(commonKanaCounts).map((char) => [char, getKanaStrokeProfile(char)])),
+    );
 
     const shi = getKanaStrokeProfile("し");
     const ji = getKanaStrokeProfile("じ");
@@ -10197,6 +10447,28 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         "reading-uses-ten-character-slots",
         readingItem.inputMode === "slots" && readingItem.slots.length === ANSWER_SLOT_COUNT,
         { inputMode: readingItem.inputMode, slotCount: readingItem.slots.length },
+      );
+      readingItem.slots[1].text = "め";
+      add(
+        "answer-compacts-leading-empty-slots",
+        getItemAnswer(readingItem) === "め",
+        getItemAnswer(readingItem, true),
+      );
+      add(
+        "kanji-katakana-two-are-grading-equivalent",
+        areAnswersEquivalent("ニ階", "二階") && !areAnswersEquivalent("ニ階", "三階"),
+      );
+      add(
+        "cross-script-lookalikes-are-grading-equivalent",
+        areAnswersEquivalent("ハ", "八") &&
+          areAnswersEquivalent("カ", "力") &&
+          areAnswersEquivalent("ロ", "口") &&
+          !areAnswersEquivalent("タ", "夕"),
+        {
+          eight: evaluateCrossScriptVisualEquivalence("八", "ハ"),
+          power: evaluateCrossScriptVisualEquivalence("力", "カ"),
+          mouth: evaluateCrossScriptVisualEquivalence("口", "ロ"),
+        },
       );
       add(
         "reading-candidate-is-single-hiragana",
@@ -10524,6 +10796,27 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       add("glyph-shape-model-penalizes-extra-protrusion", false, "glyph unavailable");
     }
 
+    const displacedPreviousStrokes = state.strokes;
+    const displacedPreviousMode = state.recognitionModeOverride;
+    try {
+      state.recognitionModeOverride = "character";
+      state.strokes = [
+        [{ x: 34, y: 34 }, { x: 72, y: 34 }, { x: 112, y: 34 }, { x: 150, y: 34 }],
+        [{ x: 42, y: 82 }, { x: 75, y: 82 }, { x: 108, y: 82 }, { x: 142, y: 82 }],
+        [{ x: 30, y: 132 }, { x: 72, y: 132 }, { x: 114, y: 132 }, { x: 154, y: 132 }],
+        [{ x: 244, y: 26 }, { x: 244, y: 65 }, { x: 244, y: 104 }, { x: 244, y: 142 }],
+      ];
+      const displacedKing = evaluateCandidateGlyphShape("王");
+      add(
+        "glyph-shape-rejects-substantial-displaced-stroke",
+        displacedKing.displacedStroke?.hardReject === true || displacedKing.penalty >= 1.2,
+        displacedKing,
+      );
+    } finally {
+      state.strokes = displacedPreviousStrokes;
+      state.recognitionModeOverride = displacedPreviousMode;
+    }
+
     const contrastivePreviousStrokes = state.strokes;
     try {
       state.strokes = [
@@ -10585,6 +10878,44 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         [{ x: 38, y: 52 }, { x: 25, y: 75 }, { x: 30, y: 105 }, { x: 105, y: 110 }],
       ];
       add("contrastive-ennyou-rejects-shinnyou-dot", evaluateEnnyouAgainstShinnyou().hardReject === true);
+
+      state.strokes = [
+        [{ x: 10, y: 10 }, { x: 90, y: 10 }],
+        [{ x: 12, y: 28 }, { x: 88, y: 28 }],
+        [{ x: 82, y: 12 }, { x: 30, y: 92 }],
+        [{ x: 82, y: 30 }, { x: 38, y: 102 }],
+        [{ x: 28, y: 42 }, { x: 78, y: 105 }],
+        [{ x: 86, y: 92 }, { x: 94, y: 100 }],
+      ];
+      add(
+        "directional-signature-accepts-falling-pair",
+        evaluateDirectionalStrokeSignature(
+          0, 6,
+          [{ offset: 3, direction: "down-left" }, { offset: 4, direction: "down-right" }],
+        ).status === "expected",
+      );
+      state.strokes[3] = [...state.strokes[3]].reverse();
+      add(
+        "directional-signature-rejects-reversed-direction",
+        evaluateDirectionalStrokeSignature(
+          0, 6,
+          [{ offset: 3, direction: "down-left" }, { offset: 4, direction: "down-right" }],
+        ).hardReject === true,
+      );
+      add(
+        "directional-registry-covers-requested-component-families",
+        GE_COMPONENT_SUFFIX_CHARS.has("戈") &&
+          LI_COMPONENT_SUFFIX_CHARS.has("吏") &&
+          GENG_COMPONENT_SUFFIX_CHARS.has("更") &&
+          ZHANG_COMPONENT_SUFFIX_CHARS.has("丈") &&
+          SEN_COMPONENT_SUFFIX_CHARS.has("浅"),
+        {
+          ge: Array.from(GE_COMPONENT_SUFFIX_CHARS),
+          li: Array.from(LI_COMPONENT_SUFFIX_CHARS),
+          geng: Array.from(GENG_COMPONENT_SUFFIX_CHARS),
+          zhang: Array.from(ZHANG_COMPONENT_SUFFIX_CHARS),
+        },
+      );
     } finally {
       state.strokes = contrastivePreviousStrokes;
     }
@@ -10623,6 +10954,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     getEducationalFontDiagnostics,
     evaluateGlyphShape: (text) => evaluateCandidateGlyphShape(String(text || "")),
     evaluateContrastiveStructure: (text) => evaluateContrastiveCandidateStructure(String(text || "")),
+    getKanaStrokeProfile: (text) => getKanaStrokeProfile(String(text || "")),
+    areAnswersEquivalent,
+    evaluateCrossScriptVisualEquivalence,
+    evaluateDirectionalStrokeSignature,
     runSelfTests: runRecognitionSelfTests,
   });
 
@@ -10766,6 +11101,15 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return Number.isFinite(count) ? count : null;
   }
 
+  function getKanaBaseStrokeCount(char) {
+    const normalized = katakanaToHiragana(String(char || "").normalize("NFKC"));
+    const educationalCount = EDUCATIONAL_HIRAGANA_STROKE_COUNTS[normalized];
+    if (Number.isFinite(educationalCount)) {
+      return educationalCount;
+    }
+    return getCharStrokeCount(char);
+  }
+
   function getKanaStrokeProfile(text) {
     const decomposed = Array.from(String(text || "").normalize("NFD"));
     let baseStrokeCount = 0;
@@ -10782,7 +11126,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         continue;
       }
 
-      const count = getCharStrokeCount(char);
+      const count = getKanaBaseStrokeCount(char);
       if (!Number.isFinite(count)) {
         return null;
       }
@@ -10794,25 +11138,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return null;
     }
 
-    const shortfallBudget = Math.min(
-      Math.ceil(baseStrokeCount * KANA_STROKE_SHORTFALL_RATIO),
-      Math.ceil(baseCharacterCount * KANA_STROKE_SHORTFALL_PER_CHAR),
-    );
-    const baseMinimum = Math.max(
-      baseCharacterCount,
-      baseStrokeCount - shortfallBudget,
-    );
-    const min = baseMinimum + diacriticStrokeCount;
-    const max = baseStrokeCount + diacriticStrokeCount;
-
+    const total = baseStrokeCount + diacriticStrokeCount;
     return {
-      min,
-      softMin: Math.max(baseCharacterCount + diacriticStrokeCount, min - KANA_STROKE_SOFT_MARGIN),
-      max,
+      min: total,
+      softMin: total,
+      max: total,
       baseStrokeCount,
       baseCharacterCount,
       diacriticStrokeCount,
-      shortfallBudget,
+      shortfallBudget: 0,
+      model: "educational-handwriting",
     };
   }
 
@@ -11294,6 +11629,84 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return createContrastiveDecision("competing", details);
     }
     return createContrastiveDecision("ambiguous", details, 0.45);
+  }
+
+  function evaluateDirectionalStrokeSignature(startIndex, count, descriptors) {
+    const data = getComponentData(startIndex, count);
+    const rules = Array.isArray(descriptors) ? descriptors : [];
+    if (!data || rules.length === 0) {
+      return createContrastiveDecision("unavailable", { reason: "missing-direction-component" });
+    }
+
+    const requiredDrop = Math.max(7, data.bounds.height * 0.065);
+    const requiredSide = Math.max(5, data.bounds.width * 0.045);
+    const observations = [];
+    let expectedCount = 0;
+    let competingCount = 0;
+
+    for (const descriptor of rules) {
+      const stroke = data.strokes[descriptor.offset];
+      if (!Array.isArray(stroke) || stroke.length < 2) {
+        observations.push({
+          offset: descriptor.offset,
+          direction: descriptor.direction,
+          status: "unavailable",
+        });
+        continue;
+      }
+      const start = stroke[0];
+      const end = stroke[stroke.length - 1];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const expectsLeft = descriptor.direction === "down-left";
+      const expectsRight = descriptor.direction === "down-right";
+      const clearlyDown = dy >= requiredDrop;
+      const clearlyUp = dy <= -requiredDrop;
+      const clearlyLeft = dx <= -requiredSide;
+      const clearlyRight = dx >= requiredSide;
+      const sideExpected = !expectsLeft && !expectsRight ||
+        (expectsLeft && clearlyLeft) || (expectsRight && clearlyRight);
+      const sideCompeting = (expectsLeft && clearlyRight) || (expectsRight && clearlyLeft);
+      let status = "ambiguous";
+
+      // 同じ線分を逆向きになぞると形は同一でも始終点が反転する。
+      // 上向きが明確な場合は、字形比較とは独立して運筆方向の競合と判定する。
+      if (clearlyUp || (clearlyDown && sideCompeting)) {
+        status = "competing";
+        competingCount += 1;
+      } else if (clearlyDown && sideExpected) {
+        status = "expected";
+        expectedCount += 1;
+      }
+
+      observations.push({
+        offset: descriptor.offset,
+        direction: descriptor.direction,
+        dx,
+        dy,
+        dxRatio: dx / Math.max(1, data.bounds.width),
+        dyRatio: dy / Math.max(1, data.bounds.height),
+        status,
+      });
+    }
+
+    const details = { requiredDrop, requiredSide, observations };
+    if (competingCount > 0) {
+      return createContrastiveDecision("competing", details);
+    }
+    if (expectedCount === rules.length) {
+      return createContrastiveDecision("expected", details);
+    }
+    return createContrastiveDecision("ambiguous", details, 0.18 + (rules.length - expectedCount) * 0.08);
+  }
+
+  // 旧診断JSON・外部デバッグ呼出しとの互換用。新規規則は署名評価器を直接利用する。
+  function evaluateDescendingStrokePair(startIndex, offsets) {
+    return evaluateDirectionalStrokeSignature(
+      startIndex,
+      Math.max(...offsets) + 1,
+      offsets.map((offset) => ({ offset, direction: "down" })),
+    );
   }
 
   function evaluateEnnyouAgainstShinnyou() {
@@ -13469,6 +13882,79 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       .trim();
   }
 
+  const crossScriptVisualEquivalenceCache = new Map();
+
+  function getAnswerCharacterScriptClass(char) {
+    const value = String(char || "");
+    if (/^\p{Script=Han}$/u.test(value)) return "han";
+    if (/^\p{Script=Katakana}$/u.test(value) || value === "ー") return "katakana";
+    return "other";
+  }
+
+  function evaluateCrossScriptVisualEquivalence(actual, expected) {
+    const fontKey = resolvedEducationalFontName || EDUCATIONAL_FONT_CANDIDATES[0] || "fallback";
+    const key = `${fontKey}:${[actual, expected].sort().join("\u241f")}`;
+    if (crossScriptVisualEquivalenceCache.has(key)) {
+      return crossScriptVisualEquivalenceCache.get(key);
+    }
+    const actualClass = getAnswerCharacterScriptClass(actual);
+    const expectedClass = getAnswerCharacterScriptClass(expected);
+    const eligible = new Set([actualClass, expectedClass]);
+    if (!(eligible.has("han") && eligible.has("katakana")) || eligible.size !== 2) {
+      const decision = { equivalent: false, reason: "ineligible-script-pair" };
+      crossScriptVisualEquivalenceCache.set(key, decision);
+      return decision;
+    }
+
+    const actualRange = getCandidateStrokeCountRange(actual);
+    const expectedRange = getCandidateStrokeCountRange(expected);
+    if (!actualRange || !expectedRange || actualRange.max !== expectedRange.max) {
+      const decision = { equivalent: false, reason: "different-stroke-count" };
+      crossScriptVisualEquivalenceCache.set(key, decision);
+      return decision;
+    }
+
+    const actualModel = getCandidateGlyphShapeModel(actual);
+    const expectedModel = getCandidateGlyphShapeModel(expected);
+    const comparison = compareGlyphShapeModels(actualModel, expectedModel);
+    if (!comparison) {
+      const decision = { equivalent: false, reason: "glyph-unavailable" };
+      crossScriptVisualEquivalenceCache.set(key, decision);
+      return decision;
+    }
+    const equivalent =
+      comparison.score <= CROSS_SCRIPT_EQUIVALENCE_MAX_SCORE &&
+      comparison.inkCoverage >= CROSS_SCRIPT_EQUIVALENCE_MIN_COVERAGE &&
+      comparison.glyphCoverage >= CROSS_SCRIPT_EQUIVALENCE_MIN_COVERAGE &&
+      comparison.coarseDifference <= CROSS_SCRIPT_EQUIVALENCE_MAX_COARSE_DIFFERENCE &&
+      comparison.projectionDifference <= CROSS_SCRIPT_EQUIVALENCE_MAX_PROJECTION_DIFFERENCE;
+    const decision = {
+      equivalent,
+      reason: equivalent ? "rendered-glyphs-indistinguishable" : "rendered-glyphs-distinguishable",
+      comparison,
+    };
+    crossScriptVisualEquivalenceCache.set(key, decision);
+    return decision;
+  }
+
+  function areAnswerCharactersVisuallyEquivalent(actual, expected) {
+    if (actual === expected) {
+      return true;
+    }
+    const knownEquivalent = ANSWER_VISUAL_EQUIVALENCE_GROUPS.some((group) =>
+      group.includes(actual) && group.includes(expected)
+    );
+    return knownEquivalent || evaluateCrossScriptVisualEquivalence(actual, expected).equivalent;
+  }
+
+  function areAnswersEquivalent(actualText, expectedText) {
+    const actual = Array.from(normalizeComparableText(actualText));
+    const expected = Array.from(normalizeComparableText(expectedText));
+    return actual.length === expected.length && actual.every((char, index) =>
+      areAnswerCharactersVisuallyEquivalent(char, expected[index])
+    );
+  }
+
   function hashString(value) {
     let hash = 2166136261;
     for (const char of String(value)) {
@@ -13546,10 +14032,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function getItemAnswer(item, placeholder = false) {
-    const text = item.slots
-      .map((record) => record.text || "□")
+    if (placeholder) {
+      return item.slots.map((record) => record.text || "□").join("");
+    }
+    // 先頭や途中の未入力枠は位置情報として扱わず、入力済み文字を左詰めして採点する。
+    return item.slots
+      .map((record) => String(record.text || ""))
+      .filter(Boolean)
       .join("");
-    return placeholder ? text : text.replace(/□+$/u, "");
   }
 
   function saveCurrentSessionState() {
@@ -13706,7 +14196,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     state.session.forEach((item) => {
       item.answerText = getItemAnswer(item);
-      item.isCorrect = normalizeComparableText(item.answerText) === normalizeComparableText(item.question.answer);
+      item.isCorrect = areAnswersEquivalent(item.answerText, item.question.answer);
       item.question.totalAttempts += 1;
       if (item.isCorrect) {
         item.question.correctCount += 1;
