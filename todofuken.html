@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.12.0" />
+    <meta name="application-version" content="1.13.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -30,7 +30,9 @@
   --button-disabled: #3b5148;
   --correct: #b8e4be;
   --incorrect: #efb1aa;
-  --shadow: rgba(0, 0, 0, 0.28);
+  --shadow: rgba(0, 0, 0, 0.24);
+  --surface-glow: rgba(255, 255, 255, 0.045);
+  --surface-depth: rgba(4, 15, 11, 0.22);
   --radius: clamp(9px, 1.6vw, 14px);
   --educational-font: "UD Digi Kyokasho N-R", "UD Digi Kyokasho NK-R", "UD Digi Kyokasho NP-R", "BIZ UDPGothic", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
 }
@@ -58,8 +60,9 @@ body {
   margin: 0;
   min-width: 0;
   background:
-    radial-gradient(circle at 20% 0%, rgba(255, 255, 255, 0.055), transparent 28rem),
-    var(--bg);
+    radial-gradient(circle at 18% 0%, rgba(255, 255, 255, 0.06), transparent 28rem),
+    radial-gradient(circle at 84% 100%, rgba(102, 146, 124, 0.045), transparent 34rem),
+    linear-gradient(160deg, #192a23 0%, var(--bg) 46%, #14231d 100%);
   color: var(--ink);
   font-family:
     "BIZ UDPGothic",
@@ -164,7 +167,8 @@ button {
   height: 5px;
   overflow: hidden;
   border-radius: 999px;
-  background: rgba(198, 215, 200, 0.18);
+  background: linear-gradient(180deg, rgba(214, 228, 215, 0.2), rgba(151, 177, 160, 0.13));
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.04);
 }
 
 .progress-bar {
@@ -172,7 +176,8 @@ button {
   height: 100%;
   display: block;
   border-radius: inherit;
-  background: var(--muted);
+  background: linear-gradient(90deg, #d4dfd2, #b6c9ba);
+  box-shadow: 0 0 7px rgba(198, 215, 200, 0.12);
   transition: width 180ms ease;
 }
 
@@ -234,8 +239,13 @@ button {
   overflow: hidden;
   border: 1.5px solid var(--line);
   border-radius: var(--radius);
-  background: linear-gradient(180deg, #28433a, var(--panel));
-  box-shadow: 0 8px 20px var(--shadow) inset;
+  background:
+    linear-gradient(180deg, rgba(53, 83, 71, 0.5), rgba(33, 55, 47, 0.94)),
+    var(--panel);
+  box-shadow:
+    inset 0 1px 0 var(--surface-glow),
+    inset 0 -9px 24px rgba(8, 24, 18, 0.15),
+    0 2px 9px rgba(0, 0, 0, 0.08);
 }
 
 .question-text {
@@ -288,7 +298,8 @@ button {
   scrollbar-color: rgba(198, 215, 200, 0.46) rgba(18, 34, 28, 0.28);
   border: 1px solid var(--line-soft);
   border-radius: calc(var(--radius) - 2px);
-  background: rgba(18, 34, 28, 0.45);
+  background: linear-gradient(180deg, rgba(28, 50, 42, 0.64), rgba(17, 34, 28, 0.54));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
 }
 
 .result-box::-webkit-scrollbar {
@@ -331,7 +342,8 @@ button {
   scroll-snap-align: nearest;
   border: 1px solid var(--line-soft);
   border-radius: clamp(6px, 1vw, 10px);
-  background: rgba(18, 34, 28, 0.22);
+  background: linear-gradient(180deg, rgba(31, 54, 45, 0.44), rgba(16, 34, 28, 0.28));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
   color: var(--ink);
   font-family: var(--educational-font);
   font-size: clamp(1.45rem, 8vmin, 4.4rem);
@@ -404,13 +416,15 @@ button {
   border: 2px solid var(--line-strong);
   border-radius: var(--radius);
   background:
+    radial-gradient(circle at 50% 42%, rgba(255, 255, 255, 0.022), transparent 52%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 34%),
-    linear-gradient(90deg, transparent 49.85%, rgba(198, 215, 200, 0.055) 50%, transparent 50.15%),
-    linear-gradient(transparent 49.85%, rgba(198, 215, 200, 0.055) 50%, transparent 50.15%),
+    linear-gradient(90deg, transparent 49.85%, rgba(198, 215, 200, 0.05) 50%, transparent 50.15%),
+    linear-gradient(transparent 49.85%, rgba(198, 215, 200, 0.05) 50%, transparent 50.15%),
     var(--panel-strong);
   box-shadow:
-    0 0 0 1px rgba(0, 0, 0, 0.18),
-    0 10px 22px var(--shadow) inset;
+    0 0 0 1px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.035),
+    inset 0 -12px 28px rgba(5, 18, 13, 0.12);
   cursor: crosshair;
   touch-action: none;
   user-select: none;
@@ -555,16 +569,19 @@ button {
   font-weight: 850;
   letter-spacing: 0.025em;
   cursor: pointer;
-  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.28);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 2px 0 rgba(0, 0, 0, 0.22),
+    0 4px 10px rgba(0, 0, 0, 0.08);
 }
 
 .primary-button {
-  background: var(--button);
+  background: linear-gradient(180deg, #eee8d2 0%, var(--button) 56%, #ddd5b9 100%);
   color: var(--button-ink);
 }
 
 .secondary-button {
-  background: var(--button-secondary);
+  background: linear-gradient(180deg, #345247 0%, var(--button-secondary) 58%, #243e34 100%);
   color: var(--button-secondary-ink);
 }
 
@@ -628,6 +645,36 @@ input:focus-visible,
 .app[data-layout="vertical-wide"],
 .app[data-layout="vertical-portable"] {
   width: 100vw;
+}
+
+/* ポータブルは操作盤を細くし、中央の手書き領域を優先する。 */
+.app[data-layout="vertical-portable"] .learning-screen {
+  grid-template-columns: minmax(132px, 0.76fr) minmax(250px, 1.82fr) minmax(62px, 0.32fr);
+}
+
+.app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+  grid-template-columns: minmax(62px, 0.32fr) minmax(250px, 1.82fr) minmax(132px, 0.76fr);
+}
+
+.app[data-layout="vertical-portable"] .actions {
+  grid-template-rows: repeat(2, clamp(74px, 24vmin, 102px)) auto;
+  align-content: center;
+  gap: clamp(5px, 1vmin, 8px);
+}
+
+.app[data-layout="vertical-portable"] .action-button {
+  min-height: 0;
+  padding: 7px 5px;
+  border-radius: 10px;
+  font-size: clamp(0.76rem, 2.2vmin, 0.92rem);
+}
+
+.app[data-layout="vertical-portable"] .slot-position {
+  min-height: 44px;
+  padding: 6px 3px;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 0.02em;
 }
 
 .app[data-layout="vertical-wide"] .learning-screen,
@@ -748,6 +795,51 @@ input:focus-visible,
   padding: 8px 4px;
   writing-mode: vertical-rl;
   text-orientation: mixed;
+}
+
+/* ポータブル固有の比率調整は共通縦書き規則より後で上書きする。 */
+.app[data-layout="vertical-portable"] .learning-screen {
+  grid-template-columns: minmax(132px, 0.76fr) minmax(250px, 1.82fr) minmax(62px, 0.32fr);
+}
+
+.app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+  grid-template-columns: minmax(62px, 0.32fr) minmax(250px, 1.82fr) minmax(132px, 0.76fr);
+}
+
+.app[data-layout="vertical-portable"] .actions {
+  grid-template-rows: repeat(2, clamp(74px, 24vmin, 102px)) auto;
+  align-content: center;
+  gap: clamp(5px, 1vmin, 8px);
+}
+
+.app[data-layout="vertical-portable"] .action-button {
+  min-height: 0;
+  padding: 7px 5px;
+  border-radius: 10px;
+  font-size: clamp(0.76rem, 2.2vmin, 0.92rem);
+}
+
+.app[data-layout="vertical-portable"] .slot-position {
+  min-height: 44px;
+  padding: 6px 3px;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
+  letter-spacing: 0.02em;
+}
+
+/* ポータブル回転時も分数表示だけはヘッダーと同じ向きで読めるよう相殺する。 */
+.slot-position-text {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.app[data-layout="vertical-portable"][data-portable-rotated="true"] .slot-position-text {
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  transform: rotate(-90deg) scale(0.92);
+  transform-origin: center;
+  letter-spacing: 0;
+  font-size: clamp(0.68rem, 2.2vmin, 0.82rem);
 }
 
 /* 右利き：進むは左下、見直しは右下。 */
@@ -950,7 +1042,7 @@ input:focus-visible,
 }
 
 .result-row::before {
-  content: counter(result-item);
+  content: attr(data-number);
   color: var(--muted);
   font-size: 0.8rem;
   font-weight: 850;
@@ -1063,21 +1155,26 @@ input:focus-visible,
 }
 
 
-/* 縦書きモードの答え合わせ：1問目を右端に置く。 */
+/* 縦書きモードの答え合わせ。DOM順を反転して1問目を右端に置くため、
+   row-reverse のブラウザ差（Android Chrome のスクロール不具合）に依存しない。 */
 .app[data-layout="vertical-wide"] .result-list,
 .app[data-layout="vertical-portable"] .result-list {
   display: flex;
-  flex-direction: row-reverse;
+  flex-direction: row;
   align-items: stretch;
-  gap: clamp(6px, 0.9vw, 10px);
+  gap: clamp(5px, 0.75vw, 8px);
   overflow-x: auto;
   overflow-y: hidden;
-  padding: 4px 4px 10px;
+  padding: 4px 4px 9px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-inline: contain;
+  touch-action: pan-x pan-y;
+  scrollbar-gutter: stable;
 }
 
 .app[data-layout="vertical-wide"] .result-row,
 .app[data-layout="vertical-portable"] .result-row {
-  flex: 0 0 clamp(78px, 8.8vw, 112px);
+  flex: 0 0 clamp(72px, 7.4vw, 98px);
   width: auto;
   height: 100%;
   min-height: 0;
@@ -1110,9 +1207,10 @@ input:focus-visible,
   writing-mode: vertical-rl;
   text-orientation: upright;
   white-space: normal;
-  word-break: keep-all;
+  word-break: normal;
+  overflow-wrap: anywhere;
   line-break: strict;
-  font-size: clamp(0.86rem, 2.2vmin, 1.08rem);
+  font-size: clamp(0.8rem, 2vmin, 1rem);
   line-height: 1.5;
 }
 
@@ -1415,11 +1513,11 @@ input:focus-visible,
   }
 
   .app[data-layout="vertical-portable"] .learning-screen {
-    grid-template-columns: minmax(150px, 0.85fr) minmax(210px, 1.45fr) minmax(88px, 0.48fr);
+    grid-template-columns: minmax(128px, 0.72fr) minmax(238px, 1.82fr) minmax(60px, 0.3fr);
   }
 
   .app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
-    grid-template-columns: minmax(88px, 0.48fr) minmax(210px, 1.45fr) minmax(150px, 0.85fr);
+    grid-template-columns: minmax(60px, 0.3fr) minmax(238px, 1.82fr) minmax(128px, 0.72fr);
   }
 }
 
@@ -1922,7 +2020,7 @@ input:focus-visible,
 
 .app[data-layout="vertical-wide"] .result-row,
 .app[data-layout="vertical-portable"] .result-row {
-  flex-basis: var(--result-row-basis, clamp(92px, 10vw, 126px));
+  flex-basis: var(--result-row-basis, clamp(72px, 7.4vw, 98px));
   width: var(--result-row-basis, auto);
   overflow: hidden;
 }
@@ -3261,7 +3359,7 @@ input:focus-visible,
         <nav class="actions" aria-label="操作盤">
           <button id="undo-button" class="action-button secondary-button" type="button" aria-keyshortcuts="Z" disabled>1画消す</button>
           <button id="clear-button" class="action-button primary-button" type="button">クリア</button>
-          <div id="slot-position" class="slot-position" aria-live="polite" aria-label="現在の文字枠">1 / 1</div>
+          <div id="slot-position" class="slot-position" aria-live="polite" aria-label="現在の文字枠"><span id="slot-position-text" class="slot-position-text">1 / 1</span></div>
         </nav>
       </section>
 
@@ -3378,6 +3476,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const progressText = document.querySelector("#progress-text");
   const progressBar = document.querySelector("#progress-bar");
   const slotPosition = document.querySelector("#slot-position");
+  const slotPositionText = document.querySelector("#slot-position-text");
   const clearButton = document.querySelector("#clear-button");
   const undoButton = document.querySelector("#undo-button");
   const advanceButton = document.querySelector("#advance-button");
@@ -3517,6 +3616,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const LOCAL_HAN_FALLBACK_LIMIT = 24;
   const LOCAL_HAN_FALLBACK_SCORE_LIMIT = 2.95;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
+  const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
+  const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
   const MAX_RECOGNITION_CORPUS_RECORDS = 80;
   const RECOGNITION_SOURCE_RANK_WEIGHT = 0.18;
   const RECOGNITION_CROSS_ENGINE_BONUS = 1.35;
@@ -3545,12 +3646,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     "UD Digi Kyokasho N-R",
     "UD Digi Kyokasho NK-R",
     "UD Digi Kyokasho NP-R",
+    "YuKyokasho",
+    "Yu Kyokasho",
     "BIZ UDPGothic",
     "Hiragino Kaku Gothic ProN",
     "Yu Gothic",
     "Meiryo",
   ]);
   const EDUCATIONAL_FONT_FALLBACKS = Object.freeze([
+    "YuKyokasho",
+    "Yu Kyokasho",
     "BIZ UDPGothic",
     "Hiragino Kaku Gothic ProN",
     "Yu Gothic",
@@ -4314,7 +4419,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     padStage.style.removeProperty("height");
     padStage.style.removeProperty("place-self");
 
-    if (state.settings.layout === "horizontal" && !learningScreen.hidden) {
+    if (!learningScreen.hidden) {
       padStage.style.width = "100%";
       padStage.style.height = "100%";
       padStage.style.placeSelf = "stretch";
@@ -4329,6 +4434,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     fitQuestionText();
     resizeCanvas();
     if (!resultScreen.hidden) {
+      syncResultRowOrder();
       scheduleResultFit();
     }
   }
@@ -4380,33 +4486,33 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     rows.forEach((row) => {
       const sentence = row.querySelector(".result-sentence");
-      if (!sentence) {
-        return;
-      }
+      if (!sentence) return;
 
-      let basis = Math.max(92, Math.ceil(row.getBoundingClientRect().width || 92));
-      let attempts = 0;
-      while (
-        attempts < 9 &&
-        (sentence.scrollWidth > sentence.clientWidth + 1 || sentence.scrollHeight > sentence.clientHeight + 1) &&
-        basis < 250
-      ) {
-        basis += 18;
-        row.style.setProperty("--result-row-basis", `${basis}px`);
-        void row.offsetWidth;
-        attempts += 1;
-      }
-
+      // まず字体を少しだけ縮め、カード幅の肥大化を避ける。
       let fontSize = Number.parseFloat(getComputedStyle(sentence).fontSize) || 16;
       let fontAttempts = 0;
       while (
-        fontAttempts < 6 &&
+        fontAttempts < 7 &&
         (sentence.scrollWidth > sentence.clientWidth + 1 || sentence.scrollHeight > sentence.clientHeight + 1) &&
-        fontSize > 11
+        fontSize > 10.5
       ) {
-        fontSize -= 1;
+        fontSize -= 0.75;
         sentence.style.fontSize = `${fontSize}px`;
         fontAttempts += 1;
+      }
+
+      // それでも収まらない長文だけ、最大116pxまで段階的に広げる。
+      let basis = Math.max(72, Math.ceil(row.getBoundingClientRect().width || 72));
+      let attempts = 0;
+      while (
+        attempts < 4 &&
+        (sentence.scrollWidth > sentence.clientWidth + 1 || sentence.scrollHeight > sentence.clientHeight + 1) &&
+        basis < 116
+      ) {
+        basis = Math.min(116, basis + 10);
+        row.style.setProperty("--result-row-basis", `${basis}px`);
+        void row.offsetWidth;
+        attempts += 1;
       }
     });
   }
@@ -5484,6 +5590,82 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return Math.min(raw, Math.PI - raw) / (Math.PI / 2);
   }
 
+  function countBinaryMaskHoles(mask, width, height) {
+    if (!mask?.length) return 0;
+    const seen = new Uint8Array(mask.length);
+    const queue = [];
+    const enqueue = (x, y) => {
+      if (x < 0 || x >= width || y < 0 || y >= height) return;
+      const index = y * width + x;
+      if (mask[index] || seen[index]) return;
+      seen[index] = 1;
+      queue.push(index);
+    };
+    for (let x = 0; x < width; x += 1) { enqueue(x, 0); enqueue(x, height - 1); }
+    for (let y = 0; y < height; y += 1) { enqueue(0, y); enqueue(width - 1, y); }
+    for (let head = 0; head < queue.length; head += 1) {
+      const index = queue[head];
+      const x = index % width;
+      const y = Math.floor(index / width);
+      enqueue(x - 1, y); enqueue(x + 1, y); enqueue(x, y - 1); enqueue(x, y + 1);
+    }
+    let holes = 0;
+    for (let index = 0; index < mask.length; index += 1) {
+      if (mask[index] || seen[index]) continue;
+      holes += 1;
+      seen[index] = 1;
+      const region = [index];
+      for (let head = 0; head < region.length; head += 1) {
+        const current = region[head];
+        const x = current % width;
+        const y = Math.floor(current / width);
+        [[-1,0],[1,0],[0,-1],[0,1]].forEach(([dx,dy]) => {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || nx >= width || ny < 0 || ny >= height) return;
+          const next = ny * width + nx;
+          if (!mask[next] && !seen[next]) { seen[next] = 1; region.push(next); }
+        });
+      }
+    }
+    return holes;
+  }
+
+  function countSkeletonFeatureClusters(skeleton, width, height, predicate) {
+    const marked = new Uint8Array(skeleton.length);
+    const neighbors = [
+      [-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1],
+    ];
+    for (let y = 1; y < height - 1; y += 1) {
+      for (let x = 1; x < width - 1; x += 1) {
+        const index = y * width + x;
+        if (!skeleton[index]) continue;
+        let degree = 0;
+        neighbors.forEach(([dx,dy]) => { if (skeleton[(y+dy)*width + x+dx]) degree += 1; });
+        if (predicate(degree)) marked[index] = 1;
+      }
+    }
+    const seen = new Uint8Array(marked.length);
+    let clusters = 0;
+    for (let start = 0; start < marked.length; start += 1) {
+      if (!marked[start] || seen[start]) continue;
+      clusters += 1;
+      seen[start] = 1;
+      const stack = [start];
+      while (stack.length) {
+        const index = stack.pop();
+        const x = index % width;
+        const y = Math.floor(index / width);
+        neighbors.forEach(([dx,dy]) => {
+          const nx=x+dx, ny=y+dy;
+          if (nx<0||nx>=width||ny<0||ny>=height) return;
+          const next=ny*width+nx;
+          if (marked[next] && !seen[next]) { seen[next]=1; stack.push(next); }
+        });
+      }
+    }
+    return clusters;
+  }
+
   function analyzeSkeletonTopology(skeleton, width, height) {
     const seen = new Uint8Array(skeleton.length);
     const components = [];
@@ -5582,7 +5764,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       }
     }
 
-    return { components, orientationHistogram };
+    return {
+      components,
+      orientationHistogram,
+      endpointClusters: countSkeletonFeatureClusters(skeleton, width, height, (degree) => degree <= 1),
+      junctionClusters: countSkeletonFeatureClusters(skeleton, width, height, (degree) => degree >= 3),
+    };
   }
 
   function compareSkeletonComponentLayouts(first, second) {
@@ -5671,6 +5858,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         coarse[cellY * coarseSize + cellX] = total ? filled / total : 0;
       }
     }
+    const topology = analyzeSkeletonTopology(skeleton, width, height);
+    topology.holeCount = countBinaryMaskHoles(dilated, width, height);
     return {
       width,
       height,
@@ -5680,7 +5869,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       rowProjection,
       columnProjection,
       coarse,
-      topology: analyzeSkeletonTopology(skeleton, width, height),
+      topology,
     };
   }
 
@@ -5735,10 +5924,22 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const componentCountDifference = Math.abs(inkComponentCount - glyphComponentCount) /
       Math.max(1, inkComponentCount, glyphComponentCount);
     const componentLayout = compareSkeletonComponentLayouts(ink.topology, glyph.topology);
+    const endpointDifference = Math.min(1, Math.abs(
+      (ink.topology?.endpointClusters || 0) - (glyph.topology?.endpointClusters || 0)
+    ) / 4);
+    const junctionDifference = Math.min(1, Math.abs(
+      (ink.topology?.junctionClusters || 0) - (glyph.topology?.junctionClusters || 0)
+    ) / 3);
+    const holeDifference = Math.min(1, Math.abs(
+      (ink.topology?.holeCount || 0) - (glyph.topology?.holeCount || 0)
+    ));
     const topologyDifference =
       orientationDifference * 0.075 +
       componentCountDifference * 0.055 +
-      (componentLayout.available ? componentLayout.score * 0.11 : 0);
+      (componentLayout.available ? componentLayout.score * 0.11 : 0) +
+      endpointDifference * 0.022 +
+      junctionDifference * 0.026 +
+      holeDifference * 0.032;
     const score =
       inkToGlyph * 0.45 +
       glyphToInk * 0.55 +
@@ -5757,6 +5958,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       componentCountDifference,
       componentLayoutScore: componentLayout.score,
       componentLayoutAvailable: componentLayout.available ? 1 : 0,
+      endpointDifference,
+      junctionDifference,
+      holeDifference,
       inkComponentCount,
       glyphComponentCount,
       topologyDifference,
@@ -5792,7 +5996,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return kept.length >= 3 ? kept : stroke;
   }
 
-  function buildInkGlyphShapeModel(strokes) {
+  function buildInkGlyphShapeModel(strokes, fitMode = "aspect") {
     const source = (Array.isArray(strokes) ? strokes : []).filter((stroke) => stroke?.length > 1);
     const pointCount = source.reduce((sum, stroke) => sum + stroke.length, 0);
     if (pointCount < GLYPH_SHAPE_MIN_POINTS) {
@@ -5812,9 +6016,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
     const size = GLYPH_SHAPE_GRID_SIZE;
     const available = size - GLYPH_SHAPE_PADDING * 2;
-    const scale = Math.min(available / width, available / height);
-    const offsetX = (size - width * scale) / 2 - left * scale;
-    const offsetY = (size - height * scale) / 2 - top * scale;
+    const uniformScale = Math.min(available / width, available / height);
+    const targetScaleX = available / width;
+    const targetScaleY = available / height;
+    const blend = fitMode === "proportion-normalized" ? GLYPH_PROPORTION_NORMALIZATION_BLEND : 0;
+    const scaleX = uniformScale + (targetScaleX - uniformScale) * blend;
+    const scaleY = uniformScale + (targetScaleY - uniformScale) * blend;
+    const offsetX = (size - width * scaleX) / 2 - left * scaleX;
+    const offsetY = (size - height * scaleY) / 2 - top * scaleY;
     const shapeCanvas = document.createElement("canvas");
     shapeCanvas.width = size;
     shapeCanvas.height = size;
@@ -5831,8 +6040,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     source.forEach((stroke) => {
       context.beginPath();
       stroke.forEach((point, index) => {
-        const x = point.x * scale + offsetX;
-        const y = point.y * scale + offsetY;
+        const x = point.x * scaleX + offsetX;
+        const y = point.y * scaleY + offsetY;
         if (index === 0) context.moveTo(x, y);
         else context.lineTo(x, y);
       });
@@ -5863,6 +6072,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (original) {
       variants.push({ id: "full", model: original, penalty: 0 });
     }
+    const proportionNormalized = buildInkGlyphShapeModel(source, "proportion-normalized");
+    if (proportionNormalized) {
+      variants.push({
+        id: "proportion-normalized",
+        model: proportionNormalized,
+        penalty: GLYPH_PROPORTION_VARIANT_PENALTY,
+      });
+    }
     const trimmedStrokes = source.map((stroke) => trimStrokeEndpointsForShape(stroke));
     const changed = trimmedStrokes.some((stroke, index) =>
       stroke !== source[index] && stroke.length !== source[index].length
@@ -5871,6 +6088,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const trimmed = buildInkGlyphShapeModel(trimmedStrokes);
       if (trimmed) {
         variants.push({ id: "endpoint-core", model: trimmed, penalty: 0.012 });
+      }
+      const trimmedNormalized = buildInkGlyphShapeModel(trimmedStrokes, "proportion-normalized");
+      if (trimmedNormalized) {
+        variants.push({
+          id: "endpoint-core+proportion",
+          model: trimmedNormalized,
+          penalty: 0.012 + GLYPH_PROPORTION_VARIANT_PENALTY,
+        });
       }
     }
     glyphInkShapeVariantCache = { fingerprint, variants };
@@ -7081,9 +7306,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     add("educational-kana-vector-exceptions-removed", Object.keys(EDUCATIONAL_KANA_PATHS).length === 0);
     add(
-      "educational-font-stack-excludes-mincho-and-cursive-fallbacks",
-      EDUCATIONAL_FONT_CANDIDATES.every((name) => !/Mincho|Kyokasho$/i.test(name)) &&
-        !EDUCATIONAL_FONT_CANDIDATES.some((name) => name === "YuKyokasho" || name === "Yu Kyokasho"),
+      "educational-font-stack-prefers-kyokasho-and-excludes-mincho",
+      EDUCATIONAL_FONT_CANDIDATES.every((name) => !/Mincho/i.test(name)) &&
+        EDUCATIONAL_FONT_CANDIDATES.some((name) => /Kyokasho/i.test(name)),
       EDUCATIONAL_FONT_CANDIDATES,
     );
 
@@ -9406,7 +9631,15 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           Math.max(0, 0.48 - comparison.glyphCoverage) * 0.25
         : Infinity;
       const shapeScore = Math.min(baseShapeScore, sparseShapeScore);
-      if (shapeScore <= LOCAL_HAN_FALLBACK_SCORE_LIMIT) {
+      // 画数が一致し、閉領域・端点・分岐の骨格構造も一致する場合は、
+      // 活字と手書きの縦横比差だけで候補を落とさない。後段の構造検査・字形検査は維持する。
+      const structuralAgreement =
+        rawCount >= range.min && rawCount <= range.max &&
+        comparison.holeDifference <= 0.01 &&
+        comparison.endpointDifference <= 0.26 &&
+        comparison.junctionDifference <= 0.34;
+      const fallbackLimit = LOCAL_HAN_FALLBACK_SCORE_LIMIT + (structuralAgreement ? 0.32 : 0);
+      if (shapeScore <= fallbackLimit) {
         scored.push({ char, score: shapeScore, comparison });
       }
     });
@@ -10274,7 +10507,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function updateActionButtons() {
     const count = getVisibleSlotCount();
     undoButton.disabled = state.strokes.length === 0;
-    slotPosition.textContent = `${state.activeSlotIndex + 1} / ${count}`;
+    slotPositionText.textContent = `${state.activeSlotIndex + 1} / ${count}`;
     slotPosition.dataset.atStart = state.activeSlotIndex <= 0 ? "true" : "false";
     slotPosition.dataset.atEnd = state.activeSlotIndex >= count - 1 ? "true" : "false";
   }
@@ -10654,6 +10887,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     row.type = "button";
     row.className = `result-row ${item.isCorrect ? "is-correct" : "is-incorrect"}`;
     row.dataset.index = String(index);
+    row.dataset.number = String(index + 1);
     row.setAttribute("aria-label", `${index + 1}問目。${item.isCorrect ? "正解" : "不正解"}。クリックで解説。`);
 
     const sentence = document.createElement("span");
@@ -10664,6 +10898,22 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     judgement.textContent = item.isCorrect ? "○" : "×";
     row.append(sentence, judgement);
     return row;
+  }
+
+  function syncResultRowOrder({ scrollToFirst = false } = {}) {
+    if (resultScreen.hidden) return;
+    const rows = Array.from(resultList.querySelectorAll(".result-row"));
+    rows.sort((a, b) => Number(a.dataset.index) - Number(b.dataset.index));
+    if (isVerticalLayout()) rows.reverse();
+    rows.forEach((row) => resultList.append(row));
+    if (scrollToFirst && isVerticalLayout()) {
+      window.requestAnimationFrame(() => {
+        resultList.scrollLeft = Math.max(0, resultList.scrollWidth - resultList.clientWidth);
+      });
+    } else if (scrollToFirst) {
+      resultList.scrollLeft = 0;
+      resultList.scrollTop = 0;
+    }
   }
 
   function showResults() {
@@ -10692,6 +10942,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       state.resultTimers.push(revealTimer);
     });
 
+    syncResultRowOrder({ scrollToFirst: true });
     scheduleResultFit();
     const summaryDelay = 180 + state.session.length * RESULT_REVEAL_INTERVAL_MS;
     const summaryTimer = window.setTimeout(() => {
@@ -11743,7 +11994,41 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   });
   replayRecognitionCorpusButton?.addEventListener("click", replayImportedRecognitionCorpus);
 
+  const resultDragState = { active: false, pointerId: null, startAxis: 0, startScroll: 0, moved: false };
+
+  resultList.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (!isVerticalLayout()) return;
+    resultDragState.active = true;
+    resultDragState.pointerId = event.pointerId;
+    resultDragState.startAxis = isPortableRotationActive() ? event.clientY : event.clientX;
+    resultDragState.startScroll = resultList.scrollLeft;
+    resultDragState.moved = false;
+    resultList.setPointerCapture?.(event.pointerId);
+  });
+
+  resultList.addEventListener("pointermove", (event) => {
+    if (!resultDragState.active || resultDragState.pointerId !== event.pointerId) return;
+    const axis = isPortableRotationActive() ? event.clientY : event.clientX;
+    const delta = axis - resultDragState.startAxis;
+    if (Math.abs(delta) > 4) resultDragState.moved = true;
+    if (resultDragState.moved) {
+      resultList.scrollLeft = resultDragState.startScroll - delta;
+      if (event.cancelable) event.preventDefault();
+    }
+  }, { passive: false });
+
+  const finishResultDrag = (event) => {
+    if (resultDragState.pointerId !== event.pointerId) return;
+    resultDragState.active = false;
+    resultDragState.pointerId = null;
+    window.setTimeout(() => { resultDragState.moved = false; }, 0);
+  };
+  resultList.addEventListener("pointerup", finishResultDrag);
+  resultList.addEventListener("pointercancel", finishResultDrag);
+
   resultList.addEventListener("click", (event) => {
+    if (resultDragState.moved) return;
     const row = event.target.closest(".result-row");
     if (row) {
       openExplanation(Number(row.dataset.index));
