@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.13.0" />
+    <meta name="application-version" content="1.14.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2053,6 +2053,139 @@ input:focus-visible,
   .app[data-layout="horizontal"] .result-sentence {
     line-height: 1.48;
   }
+}
+
+
+/* v1.14.0: visual-viewport based portable layout and overflow-safe dialogs */
+:root {
+  --app-visual-width: 100vw;
+  --app-visual-height: 100dvh;
+  --portable-pad-side: 280px;
+  --portable-actions-size: 62px;
+  --portable-question-min: 136px;
+  --portable-gap: 6px;
+}
+
+.app {
+  width: min(var(--app-visual-width), 1100px);
+  height: var(--app-visual-height);
+  max-height: var(--app-visual-height);
+}
+
+/*
+ * ポータブルでは、手書き欄を含む列を fr で余らせない。
+ * 余白は問題文側へ渡し、パッド列そのものを正方形寸法に固定する。
+ * これにより回転後もパッド前後に「セル内の空白」が生じない。
+ */
+.app[data-layout="vertical-portable"] .learning-screen {
+  grid-template-columns:
+    minmax(var(--portable-question-min), 1fr)
+    var(--portable-pad-side)
+    var(--portable-actions-size);
+  column-gap: var(--portable-gap);
+}
+
+.app[data-layout="vertical-portable"][data-handedness="left"] .learning-screen {
+  grid-template-columns:
+    var(--portable-actions-size)
+    var(--portable-pad-side)
+    minmax(var(--portable-question-min), 1fr);
+}
+
+.app[data-layout="vertical-portable"] .pad-stage {
+  width: var(--portable-pad-side);
+  height: var(--portable-pad-side);
+  place-self: center;
+}
+
+.app[data-layout="vertical-portable"] .actions {
+  gap: clamp(4px, 0.8vmin, 6px);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.app[data-layout="vertical-portable"] .action-button {
+  padding: 5px 3px;
+  border-radius: 9px;
+}
+
+.app[data-layout="vertical-portable"] .slot-position {
+  padding: 4px 2px;
+  min-height: 38px;
+}
+
+/*
+ * iOS / Android のブラウザUI伸縮時は CSS の vh/dvh と実表示領域が
+ * 一時的にずれることがある。JS が visualViewport の実測値を入れる。
+ */
+.overlay {
+  width: var(--app-visual-width);
+  height: var(--app-visual-height);
+  max-width: var(--app-visual-width);
+  max-height: var(--app-visual-height);
+}
+
+/* 解説は、収まりきらない場合にも必ずスクロールして全内容へ到達可能にする。 */
+.explanation-overlay[data-layout="vertical-portable"][data-portable-rotated="true"] {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+  padding: max(8px, env(safe-area-inset-top))
+    max(8px, env(safe-area-inset-right))
+    max(8px, env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-left));
+}
+
+.explanation-overlay[data-layout="vertical-portable"][data-portable-rotated="true"] .explanation-dialog {
+  width: min(760px, calc(var(--app-visual-height) - 20px));
+  max-width: none;
+  max-height: calc(var(--app-visual-width) - 20px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  transform: rotate(90deg);
+  transform-origin: center center;
+  padding: clamp(14px, 3.8vmin, 28px);
+}
+
+.explanation-overlay[data-layout="vertical-portable"][data-portable-rotated="true"] .explanation-actions {
+  margin-top: clamp(12px, 3vmin, 22px);
+}
+
+/* 小さい実表示領域ではボタンを少し圧縮し、本文の可視領域を優先する。 */
+@media (max-width: 430px), (max-height: 700px) {
+  .explanation-dialog {
+    padding: 16px;
+  }
+
+  .explanation-text {
+    line-height: 1.62;
+  }
+
+  .explanation-actions {
+    margin-top: 14px;
+    gap: 7px;
+  }
+
+  .explanation-action {
+    min-height: 42px;
+  }
+}
+
+
+/* 回転ダイアログは変形後の見た目を画面中央へ置く。grid の中央寄せは transform 前の寸法を基準にするため使わない。 */
+.explanation-overlay[data-layout="vertical-portable"][data-portable-rotated="true"] {
+  display: block;
+  position: fixed;
+}
+
+.explanation-overlay[data-layout="vertical-portable"][data-portable-rotated="true"] .explanation-dialog {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  margin: 0;
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
 }
 
 </style>
@@ -4395,13 +4528,67 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return isPortableRotationActive() ? "clockwise" : "none";
   }
 
+  function getVisualViewportMetrics() {
+    const viewport = window.visualViewport;
+    const width = Math.max(1, viewport?.width || window.innerWidth || document.documentElement.clientWidth || 1);
+    const height = Math.max(1, viewport?.height || window.innerHeight || document.documentElement.clientHeight || 1);
+    return {
+      width,
+      height,
+      offsetLeft: viewport?.offsetLeft || 0,
+      offsetTop: viewport?.offsetTop || 0,
+    };
+  }
+
+  function syncVisualViewportMetrics() {
+    const viewport = getVisualViewportMetrics();
+    document.documentElement.style.setProperty("--app-visual-width", `${viewport.width}px`);
+    document.documentElement.style.setProperty("--app-visual-height", `${viewport.height}px`);
+    return viewport;
+  }
+
+  function getPortableLayoutGeometry(shellRect, shouldRotatePortable) {
+    const logicalWidth = Math.max(
+      1,
+      shouldRotatePortable ? shellRect.height : shellRect.width,
+    );
+    const logicalHeight = Math.max(
+      1,
+      shouldRotatePortable ? shellRect.width : shellRect.height,
+    );
+
+    // 操作盤は細く保ち、問題欄には最低限の読みやすさを残す。
+    // 余った長辺方向の領域は問題欄へ渡し、パッド列の前後に空白を残さない。
+    const gap = Math.max(4, Math.min(8, logicalHeight * 0.014));
+    const actionsSize = Math.max(54, Math.min(68, logicalHeight * 0.17));
+    const questionMin = Math.max(124, Math.min(158, logicalHeight * 0.38));
+    const widthLimitedSide = logicalWidth - questionMin - actionsSize - gap * 2;
+    const padSide = Math.max(
+      180,
+      Math.min(logicalHeight, Math.max(180, widthLimitedSide)),
+    );
+
+    return {
+      logicalWidth,
+      logicalHeight,
+      gap,
+      actionsSize,
+      questionMin,
+      padSide,
+    };
+  }
+
   let layoutFitFrame = 0;
 
   function fitScreenLayout() {
     layoutFitFrame = 0;
+    syncVisualViewportMetrics();
+
     const shellRect = screenShell.getBoundingClientRect();
     const shouldRotatePortable =
-      isPortableLayout() && shellRect.height > shellRect.width && shellRect.width > 0;
+      isPortableLayout() &&
+      shellRect.height > shellRect.width &&
+      shellRect.width > 0;
 
     app.dataset.portableRotated = shouldRotatePortable ? "true" : "false";
 
@@ -4419,15 +4606,36 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     padStage.style.removeProperty("height");
     padStage.style.removeProperty("place-self");
 
-    if (!learningScreen.hidden) {
-      padStage.style.width = "100%";
-      padStage.style.height = "100%";
-      padStage.style.placeSelf = "stretch";
-      const available = padStage.getBoundingClientRect();
-      const side = Math.max(1, Math.min(available.width, available.height));
-      padStage.style.width = `${side}px`;
-      padStage.style.height = `${side}px`;
-      padStage.style.placeSelf = "center";
+    if (isPortableLayout()) {
+      const geometry = getPortableLayoutGeometry(shellRect, shouldRotatePortable);
+      app.style.setProperty("--portable-pad-side", `${Math.floor(geometry.padSide)}px`);
+      app.style.setProperty("--portable-actions-size", `${Math.floor(geometry.actionsSize)}px`);
+      app.style.setProperty("--portable-question-min", `${Math.floor(geometry.questionMin)}px`);
+      app.style.setProperty("--portable-gap", `${Math.floor(geometry.gap)}px`);
+
+      if (!learningScreen.hidden) {
+        padStage.style.width = `${Math.floor(geometry.padSide)}px`;
+        padStage.style.height = `${Math.floor(geometry.padSide)}px`;
+        padStage.style.placeSelf = "center";
+      }
+    } else {
+      app.style.removeProperty("--portable-pad-side");
+      app.style.removeProperty("--portable-actions-size");
+      app.style.removeProperty("--portable-question-min");
+      app.style.removeProperty("--portable-gap");
+
+      if (!learningScreen.hidden) {
+        padStage.style.width = "100%";
+        padStage.style.height = "100%";
+        padStage.style.placeSelf = "stretch";
+        // transform 後の getBoundingClientRect ではなく、レイアウト寸法を優先する。
+        const availableWidth = Math.max(1, padStage.offsetWidth);
+        const availableHeight = Math.max(1, padStage.offsetHeight);
+        const side = Math.max(1, Math.min(availableWidth, availableHeight));
+        padStage.style.width = `${side}px`;
+        padStage.style.height = `${side}px`;
+        padStage.style.placeSelf = "center";
+      }
     }
 
     syncExplanationLayout();
@@ -12068,6 +12276,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   window.addEventListener("keydown", handleKeyDown);
   window.addEventListener("resize", scheduleLayoutFit);
   window.addEventListener("resize", scheduleTraceLayoutFit);
+  window.addEventListener("orientationchange", scheduleLayoutFit);
+  window.addEventListener("orientationchange", scheduleTraceLayoutFit);
+  window.visualViewport?.addEventListener("resize", scheduleLayoutFit);
+  window.visualViewport?.addEventListener("resize", scheduleTraceLayoutFit);
+  window.visualViewport?.addEventListener("scroll", scheduleLayoutFit);
+  window.visualViewport?.addEventListener("scroll", scheduleTraceLayoutFit);
   window.addEventListener("pagehide", () => {
     cancelGoogleRecognition(state);
     cancelTraceRecognition();
@@ -12076,6 +12290,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   new ResizeObserver(scheduleLayoutFit).observe(screenShell);
   new ResizeObserver(scheduleTraceLayoutFit).observe(traceDialog);
+  syncVisualViewportMetrics();
   init();
 })();
 
