@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.15.0" />
+    <meta name="application-version" content="1.16.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2100,6 +2100,7 @@ input:focus-visible,
 
 /* v1.14.0: visual-viewport based portable layout and overflow-safe dialogs */
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
+/* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
 :root {
   --app-visual-width: 100vw;
   --app-visual-height: 100dvh;
@@ -2471,9 +2472,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   const LANGUAGE_CANDIDATES = [{ languages: ["ja"] }, { languages: ["ja-JP"] }];
   const SUPPORTED_POINTER_TYPES = new Set(["mouse", "touch", "stylus"]);
-  const MIN_LINE_WIDTH = 6;
-  const MAX_LINE_WIDTH = 12;
-  const LINE_WIDTH_RATIO = 0.024;
+  // 表示上の筆跡は認識器へ渡す中心線座標とは独立している。
+  // 細部・交差位置を見やすくし、指先でも狙った位置へ書き込みやすくするため、
+  // 一般的なスマホ/PCパッドで従来より約1〜2 CSS px細くする。
+  const MIN_LINE_WIDTH = 5;
+  const MAX_LINE_WIDTH = 10;
+  const LINE_WIDTH_RATIO = 0.020;
   const INK_COLOR = "#f4f0df";
   const DRAG_START_DISTANCE_MOUSE = 8;
   const DRAG_START_DISTANCE_TOUCH = 10;
@@ -2535,6 +2539,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const LOCAL_KANA_FALLBACK_PENALTY = 0.58;
   const LOCAL_KANA_FALLBACK_LIMIT = 18;
   const SMALL_KANA_PREFERRED_PENALTY = 1.36;
+  const SMALL_KANA_QUARTER_LARGE_PENALTY = 1.82;
   const SMALL_KANA_AMBIGUOUS_PENALTY = 0.56;
   const SMALL_KANA_DEFAULT_PENALTY = 1.02;
   const LOCAL_HAN_FALLBACK_PENALTY = 0.46;
@@ -3100,12 +3105,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return { x: logicalX, y: logicalY };
   }
 
-  function getSmallKanaPlacementEvidence(strokes = state.strokes) {
+  function getSmallKanaPlacementEvidence(strokes = state.strokes, guideOverride = null) {
     const source = (Array.isArray(strokes) ? strokes : []).filter((stroke) => stroke?.length > 1);
     const points = source.flat().filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
-    const guide = getCanvasGuide();
+    const guide = guideOverride || getCanvasGuide();
     if (points.length < 2 || !guide?.width || !guide?.height) {
-      return { available: false, status: "unavailable", strength: 0, preferredZone: false, centralZone: false };
+      return {
+        available: false,
+        status: "unavailable",
+        strength: 0,
+        preferredZone: false,
+        quarterContained: false,
+        centralZone: false,
+      };
     }
 
     const normalized = points.map((point) => mapLogicalPointToVisualPad(point, guide));
@@ -3118,35 +3130,85 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const widthRatio = Math.max(0, maxX - minX);
     const heightRatio = Math.max(0, maxY - minY);
     const vertical = isVerticalLayout();
-    const inPreferredHalf = (point) => vertical
+
+    // 小書きの教育上の基準位置そのものを最優先する。
+    // 縦書き＝右上1/4、横書き＝左下1/4。
+    const inPreferredQuarter = (point) => vertical
       ? point.x >= 0.5 && point.y <= 0.5
       : point.x <= 0.5 && point.y >= 0.5;
     const inPreferredCore = (point) => vertical
       ? point.x >= 0.58 && point.y <= 0.42
       : point.x <= 0.42 && point.y >= 0.58;
-    const preferredShare = normalized.filter(inPreferredHalf).length / normalized.length;
+
+    const preferredShare = normalized.filter(inPreferredQuarter).length / normalized.length;
     const preferredCoreShare = normalized.filter(inPreferredCore).length / normalized.length;
+
+    // 中央境界を数ピクセルまたぐ程度で小書き判定が反転しないよう、
+    // 3%だけ許容しつつ、90%以上の中心線が正しい1/4に入っていることを要求する。
+    const quarterTolerance = 0.03;
+    const quarterBoundsContained = vertical
+      ? minX >= 0.5 - quarterTolerance && maxY <= 0.5 + quarterTolerance
+      : maxX <= 0.5 + quarterTolerance && minY >= 0.5 - quarterTolerance;
+    const quarterContained = quarterBoundsContained && preferredShare >= 0.9;
+
     const preferredCentroid = vertical
       ? centerX >= 0.585 && centerY <= 0.415
       : centerX <= 0.415 && centerY >= 0.585;
     const nearPreferredCentroid = vertical
       ? centerX >= 0.545 && centerY <= 0.455
       : centerX <= 0.455 && centerY >= 0.545;
-    // 面積は極端に大きい入力を小書き扱いしないための補助条件だけに使う。
+
+    // 面積は「1/4に置いた」という教育上の位置情報より弱い補助情報としてのみ使う。
+    // 1/4内に実質収まる場合は、その事実だけで強い小書き根拠とする。
     const clearlyOversized = widthRatio >= 0.84 || heightRatio >= 0.84;
-    const preferredZone = !clearlyOversized && preferredCentroid && preferredShare >= 0.64 && preferredCoreShare >= 0.24;
-    const nearPreferredZone = !preferredZone && !clearlyOversized && nearPreferredCentroid && preferredShare >= 0.56;
+    const preferredZone =
+      !quarterContained &&
+      !clearlyOversized &&
+      preferredCentroid &&
+      preferredShare >= 0.64 &&
+      preferredCoreShare >= 0.24;
+    const nearPreferredZone =
+      !quarterContained &&
+      !preferredZone &&
+      !clearlyOversized &&
+      nearPreferredCentroid &&
+      preferredShare >= 0.56;
     const centralZone = centerX >= 0.34 && centerX <= 0.66 && centerY >= 0.34 && centerY <= 0.66;
-    const strength = preferredZone ? 1 : nearPreferredZone ? 0.54 : 0;
+    const strength = quarterContained ? 1.2 : preferredZone ? 1 : nearPreferredZone ? 0.54 : 0;
     const oppositeZone = vertical
       ? centerX <= 0.44 || centerY >= 0.56
       : centerX >= 0.56 || centerY <= 0.44;
 
     return {
       available: true,
-      status: preferredZone ? "preferred-small-zone" : nearPreferredZone ? "near-small-zone" : centralZone ? "central-default-large" : "full-size-zone",
-      strength, preferredZone, nearPreferredZone, centralZone, oppositeZone, clearlyOversized, vertical,
-      centerX, centerY, preferredShare, preferredCoreShare, widthRatio, heightRatio,
+      status: quarterContained
+        ? "preferred-quarter-contained"
+        : preferredZone
+          ? "preferred-small-zone"
+          : nearPreferredZone
+            ? "near-small-zone"
+            : centralZone
+              ? "central-default-large"
+              : "full-size-zone",
+      strength,
+      quarterContained,
+      quarterBoundsContained,
+      preferredZone,
+      nearPreferredZone,
+      centralZone,
+      oppositeZone,
+      clearlyOversized,
+      vertical,
+      centerX,
+      centerY,
+      minX,
+      maxX,
+      minY,
+      maxY,
+      preferredShare,
+      preferredCoreShare,
+      widthRatio,
+      heightRatio,
     };
   }
 
@@ -3160,11 +3222,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     let penalty = 0;
     if (isSmall) {
-      if (evidence.strength >= 0.8) penalty = 0;
+      if (evidence.quarterContained || evidence.strength >= 0.8) penalty = 0;
       else if (evidence.strength > 0) penalty = SMALL_KANA_AMBIGUOUS_PENALTY;
       else penalty = evidence.oppositeZone ? SMALL_KANA_PREFERRED_PENALTY : SMALL_KANA_DEFAULT_PENALTY;
     } else {
-      if (evidence.strength >= 0.8) penalty = SMALL_KANA_PREFERRED_PENALTY;
+      if (evidence.quarterContained) penalty = SMALL_KANA_QUARTER_LARGE_PENALTY;
+      else if (evidence.strength >= 0.8) penalty = SMALL_KANA_PREFERRED_PENALTY;
       else if (evidence.strength > 0) penalty = SMALL_KANA_AMBIGUOUS_PENALTY;
       else penalty = 0;
     }
@@ -3185,9 +3248,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (!evidence.available) {
       return text;
     }
-    // 教育上明確な小書き位置に置かれた場合だけ小字へ確定する。
-    // それ以外は通常サイズを既定にし、面積だけでは小字化しない。
-    if (evidence.strength >= 0.8) {
+    // 右上/左下の1/4へ収まる入力は、教育上の配置規則を満たす強い証拠として
+    // 認識器が返した大小より優先する。面積だけで小字化はしない。
+    if (evidence.quarterContained || evidence.strength >= 0.8) {
       return small || char;
     }
     if (evidence.strength === 0) {
@@ -5829,6 +5892,63 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     } finally {
       state.settings.layout = smallKanaPreviousLayout;
       app.dataset.portableRotated = smallKanaPreviousRotation || "false";
+    }
+
+    const smallKanaQuarterPreviousLayout = state.settings.layout;
+    const smallKanaQuarterPreviousRotation = app.dataset.portableRotated;
+    try {
+      state.settings.layout = "horizontal";
+      app.dataset.portableRotated = "false";
+      const horizontalQuarter = getSmallKanaPlacementEvidence(
+        [[
+          { x: 8, y: 62, t: 0 },
+          { x: 22, y: 70, t: 20 },
+          { x: 36, y: 86, t: 40 },
+          { x: 45, y: 94, t: 60 },
+        ]],
+        { width: 100, height: 100 },
+      );
+      add(
+        "small-kana-horizontal-left-bottom-quarter-is-decisive",
+        horizontalQuarter.quarterContained && horizontalQuarter.strength >= 1,
+        horizontalQuarter,
+      );
+
+      state.settings.layout = "vertical-wide";
+      const verticalQuarter = getSmallKanaPlacementEvidence(
+        [[
+          { x: 57, y: 44, t: 0 },
+          { x: 68, y: 32, t: 20 },
+          { x: 82, y: 20, t: 40 },
+          { x: 94, y: 8, t: 60 },
+        ]],
+        { width: 100, height: 100 },
+      );
+      add(
+        "small-kana-vertical-right-top-quarter-is-decisive",
+        verticalQuarter.quarterContained && verticalQuarter.strength >= 1,
+        verticalQuarter,
+      );
+
+      const horizontalCenter = (() => {
+        state.settings.layout = "horizontal";
+        return getSmallKanaPlacementEvidence(
+          [[
+            { x: 34, y: 42, t: 0 },
+            { x: 50, y: 50, t: 20 },
+            { x: 66, y: 58, t: 40 },
+          ]],
+          { width: 100, height: 100 },
+        );
+      })();
+      add(
+        "small-kana-central-writing-is-not-quarter-contained",
+        !horizontalCenter.quarterContained,
+        horizontalCenter,
+      );
+    } finally {
+      state.settings.layout = smallKanaQuarterPreviousLayout;
+      app.dataset.portableRotated = smallKanaQuarterPreviousRotation || "false";
     }
 
     const previousMode = state.recognitionModeOverride;
@@ -8879,7 +8999,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           const placement = getSmallKanaPlacementEvidence();
           const candidateIsSmall = SMALL_KANA_PATTERN.test(candidate);
           let alternativePenalty = 0.9;
-          if (placement.strength >= 0.8) {
+          if (placement.quarterContained) {
+            // 正しい1/4に収まる場合は、外部認識器の大小判定より配置規則を優先する。
+            alternativePenalty = candidateIsSmall ? 1.22 : -0.58;
+          } else if (placement.strength >= 0.8) {
             alternativePenalty = candidateIsSmall ? 1.0 : -0.36;
           } else if (placement.strength > 0) {
             alternativePenalty = candidateIsSmall ? 0.52 : -0.08;
