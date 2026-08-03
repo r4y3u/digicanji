@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.18.1" />
+    <meta name="application-version" content="1.19.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2142,7 +2142,7 @@ input:focus-visible,
 /* v1.14.0: visual-viewport based portable layout and overflow-safe dialogs */
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
-/* v1.18.1: v1.17 recognition baseline restored; retry always starts at the first slot */
+/* v1.19.0: mixed-writing small kana and one-character trace practice */
 .result-box,
 .review-menu,
 .result-list {
@@ -2422,17 +2422,17 @@ input:focus-visible,
       <section id="trace-dialog" class="trace-dialog" role="dialog" aria-modal="true" aria-labelledby="trace-title">
         <h2 id="trace-title" class="visually-hidden">なぞり書き</h2>
         <div id="trace-surface" class="trace-surface">
-          <section class="trace-question-answer-panel" aria-label="問題文とフリー認識枠">
+          <section class="trace-question-answer-panel" aria-label="問題文となぞり書きの進行・認識結果">
             <p id="trace-question-text" class="trace-question-text"></p>
-            <output id="trace-result-box" class="trace-result-box" aria-label="フリー認識枠" data-state="idle">
-              <span id="trace-recognition-text" class="trace-recognition-text">フリー</span>
+            <output id="trace-result-box" class="trace-result-box" aria-label="1文字ずつの認識結果" data-state="idle">
+              <span id="trace-recognition-text" class="trace-recognition-text">1 / 1</span>
               <span id="trace-recognition-status" class="trace-recognition-status" aria-live="polite"></span>
             </output>
           </section>
 
           <section id="trace-pad-stage" class="trace-pad-stage" aria-label="なぞり書きパッド">
             <canvas id="trace-pad" aria-label="模範解答をなぞる手書きパッド"></canvas>
-            <button id="trace-ok-button" class="trace-ok-button" type="button">OK</button>
+            <button id="trace-ok-button" class="trace-ok-button" type="button">完了</button>
           </section>
 
           <nav class="trace-actions" aria-label="なぞり書き操作盤">
@@ -3099,6 +3099,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     trace: {
       itemIndex: -1,
       answer: "",
+      answerChars: [],
+      characterIndex: 0,
       strokes: [],
       activePointerId: null,
       activeStroke: null,
@@ -3166,6 +3168,49 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function isReadingResponse() {
     return !isFreeMode() && getCurrentResponseKind() === "reading";
+  }
+
+  function getKanaSizePair(text) {
+    if (getCharacterLength(text) !== 1) {
+      return null;
+    }
+    const char = Array.from(String(text || ""))[0] || "";
+    const small = LARGE_TO_SMALL_KANA[char];
+    if (small) {
+      return { large: char, small };
+    }
+    const large = SMALL_TO_LARGE_KANA[char];
+    return large ? { large, small: char } : null;
+  }
+
+  function getExpectedActiveAnswerCharacter() {
+    const item = state.session[state.currentQuestionIndex];
+    if (!item || isFreeMode()) {
+      return "";
+    }
+    return Array.from(String(item.question?.answer || ""))[state.activeSlotIndex] || "";
+  }
+
+  function isKanaSizePlacementEligible(text, expectedText = "") {
+    const pair = getKanaSizePair(text);
+    if (!pair) {
+      return false;
+    }
+    if (isReadingResponse()) {
+      return true;
+    }
+    if (isFreeMode() || getCurrentResponseKind() !== "writing") {
+      return false;
+    }
+
+    // 混合表記では、現在の解答位置が同じ大小ペアのかなである場合だけ
+    // 小書き配置を使う。漢字候補や無関係なかな候補の順位には触れない。
+    const expectedPair = getKanaSizePair(expectedText || getExpectedActiveAnswerCharacter());
+    return Boolean(
+      expectedPair &&
+      expectedPair.large === pair.large &&
+      expectedPair.small === pair.small
+    );
   }
 
   function mapLogicalPointToVisualPad(point, guide = getCanvasGuide()) {
@@ -3308,8 +3353,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return { ...evidence, isSmall, paired, hardReject: false, penalty };
   }
 
-  function resolveKanaSizeByPlacement(text, strokes = state.strokes) {
-    if (!isReadingResponse() || getCharacterLength(text) !== 1) {
+  function resolveKanaSizeByPlacement(
+    text,
+    strokes = state.strokes,
+    expectedText = "",
+    guideOverride = null,
+  ) {
+    if (!isKanaSizePlacementEligible(text, expectedText) || getCharacterLength(text) !== 1) {
       return text;
     }
     const char = Array.from(String(text || ""))[0] || "";
@@ -3318,7 +3368,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     if (!small && !large) {
       return text;
     }
-    const evidence = getSmallKanaPlacementEvidence(strokes);
+    const evidence = getSmallKanaPlacementEvidence(strokes, guideOverride);
     if (!evidence.available) {
       return text;
     }
@@ -6217,6 +6267,51 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       );
       state.recognitionResponseKindOverride = "writing";
       add(
+        "mixed-writing-small-kana-enables-matching-size-pair-only",
+        isKanaSizePlacementEligible("つ", "っ") &&
+          isKanaSizePlacementEligible("ゆ", "ゅ") &&
+          !isKanaSizePlacementEligible("や", "っ") &&
+          !isKanaSizePlacementEligible("都", "っ"),
+        {
+          tsu: isKanaSizePlacementEligible("つ", "っ"),
+          yu: isKanaSizePlacementEligible("ゆ", "ゅ"),
+          unrelatedKana: isKanaSizePlacementEligible("や", "っ"),
+          han: isKanaSizePlacementEligible("都", "っ"),
+        },
+      );
+      const mixedSmallKanaStrokes = [[
+        { x: 8, y: 62, t: 0 },
+        { x: 22, y: 70, t: 20 },
+        { x: 36, y: 86, t: 40 },
+        { x: 45, y: 94, t: 60 },
+      ]];
+      const mixedFullSizeStrokes = [[
+        { x: 24, y: 24, t: 0 },
+        { x: 50, y: 42, t: 20 },
+        { x: 76, y: 76, t: 40 },
+      ]];
+      add(
+        "mixed-writing-tsu-resolves-by-educational-placement",
+        resolveKanaSizeByPlacement(
+          "つ",
+          mixedSmallKanaStrokes,
+          "っ",
+          { width: 100, height: 100 },
+        ) === "っ" &&
+          resolveKanaSizeByPlacement(
+            "っ",
+            mixedFullSizeStrokes,
+            "っ",
+            { width: 100, height: 100 },
+          ) === "つ",
+      );
+      state.recognitionResponseKindOverride = "reading";
+      add(
+        "reading-small-kana-placement-remains-enabled",
+        isKanaSizePlacementEligible("つ") && isKanaSizePlacementEligible("っ"),
+      );
+      state.recognitionResponseKindOverride = "writing";
+      add(
         "writing-cross-script-top-runs-han-fallback",
         shouldTryLocalHanFallback({
           accepted: [{ text: "ホ", glyphShape: { available: true, penalty: 0.1, score: 0.08 } }],
@@ -6799,6 +6894,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     evaluateCrossScriptVisualEquivalence,
     evaluateDirectionalStrokeSignature,
     getSmallKanaPlacementEvidence,
+    isKanaSizePlacementEligible,
+    resolveKanaSizeByPlacement,
     getLocalKanaFallbackCandidates,
     getLocalHanFallbackCandidates,
     evaluateChuuPenetrationTopology,
@@ -8654,7 +8751,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       }
     }
 
-    if (result.pass && isReadingResponse() && isKanaOnly(text)) {
+    if (result.pass && isKanaSizePlacementEligible(text) && isKanaOnly(text)) {
       result.kanaPlacement = evaluateKanaSizePlacement(text);
       if (result.kanaPlacement.available) {
         result.scorePenalty += result.kanaPlacement.penalty;
@@ -9233,7 +9330,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         });
 
         const sizePair = LARGE_TO_SMALL_KANA[candidate] || SMALL_TO_LARGE_KANA[candidate];
-        if (isReadingResponse() && sizePair) {
+        if (isKanaSizePlacementEligible(candidate) && sizePair) {
           const placement = getSmallKanaPlacementEvidence();
           const candidateIsSmall = SMALL_KANA_PATTERN.test(candidate);
           let alternativePenalty = 0.9;
@@ -10920,7 +11017,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       Math.max(bounds.width, bounds.height) >= MIN_RECOGNITION_INK_LENGTH * 0.55;
   }
 
-  function setTraceRecognition(text = "フリー", visualState = "idle", status = "") {
+  function getTraceProgressText() {
+    const total = Math.max(1, state.trace.answerChars.length);
+    const current = Math.min(total, state.trace.characterIndex + 1);
+    return `${current} / ${total}`;
+  }
+
+  function getTracePromptText() {
+    return state.trace.answer ? `「${state.trace.answer}」をなぞる` : "1文字ずつなぞる";
+  }
+
+  function setTraceRecognition(
+    text = getTraceProgressText(),
+    visualState = "idle",
+    status = getTracePromptText(),
+  ) {
     state.trace.recognizedText = visualState === "correct" || visualState === "incorrect" ? text : "";
     renderEducationalKanaText(traceRecognitionText, text);
     traceRecognitionStatus.textContent = status;
@@ -11102,9 +11213,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     window.clearTimeout(state.trace.recognitionTimer);
     if (!hasMeaningfulTraceInk()) {
       setTraceRecognition(
-        state.trace.strokes.length > 0 ? "候補なし" : "フリー",
+        state.trace.strokes.length > 0 ? "候補なし" : getTraceProgressText(),
         "idle",
-        state.trace.strokes.length > 0 ? "もう少し大きく書いてください" : "",
+        state.trace.strokes.length > 0 ? "もう少し大きく書いてください" : getTracePromptText(),
       );
       return;
     }
@@ -11278,7 +11389,43 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
     drawTraceCanvas();
-    setTraceRecognition("フリー", "idle", "");
+    setTraceRecognition();
+  }
+
+  function loadTraceCharacter(index) {
+    const total = state.trace.answerChars.length;
+    if (total === 0) {
+      return false;
+    }
+    cancelTraceRecognition();
+    state.trace.characterIndex = Math.max(0, Math.min(total - 1, index));
+    state.trace.answer = state.trace.answerChars[state.trace.characterIndex] || "";
+    state.trace.strokes = [];
+    state.trace.activePointerId = null;
+    state.trace.activeStroke = null;
+    state.trace.lastPoint = null;
+    state.trace.recognizedText = "";
+    state.trace.recognitionCache = { fingerprint: "", text: "" };
+    state.trace.googleFailed = false;
+    const isLast = state.trace.characterIndex >= total - 1;
+    traceOkButton.textContent = isLast ? "完了" : "次の字";
+    traceOkButton.setAttribute(
+      "aria-label",
+      isLast ? "なぞり書きを完了する" : `次の文字へ進む。${getTraceProgressText()}`,
+    );
+    setTraceRecognition();
+    drawTraceCanvas();
+    return true;
+  }
+
+  function advanceTracePractice() {
+    if (state.trace.characterIndex < state.trace.answerChars.length - 1) {
+      loadTraceCharacter(state.trace.characterIndex + 1);
+      scheduleTraceLayoutFit();
+      traceCanvas.focus?.({ preventScroll: true });
+      return;
+    }
+    closeTracePractice();
   }
 
   function openTracePractice() {
@@ -11288,7 +11435,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
     cancelTraceRecognition();
     state.trace.itemIndex = state.explanationIndex;
-    state.trace.answer = item.question.answer;
+    state.trace.answerChars = Array.from(String(item.question.answer || ""));
+    state.trace.characterIndex = 0;
+    state.trace.answer = state.trace.answerChars[0] || "";
     state.trace.strokes = [];
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
@@ -11297,13 +11446,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.recognizedText = "";
     state.trace.recognitionCache = { fingerprint: "", text: "" };
     state.trace.googleFailed = false;
-    setTraceRecognition("フリー", "idle", "");
     traceOverlay.dataset.layout = state.settings.layout;
     traceOverlay.dataset.handedness = state.settings.handedness;
     traceOverlay.dataset.portableRotated = "false";
     renderTraceQuestion(item.question);
     explanationOverlay.hidden = true;
     traceOverlay.hidden = false;
+    loadTraceCharacter(0);
     scheduleTraceLayoutFit();
     window.requestAnimationFrame(() => traceOkButton.focus({ preventScroll: true }));
   }
@@ -11443,7 +11592,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         undoTraceStroke();
       } else if (event.key === "Enter") {
         event.preventDefault();
-        closeTracePractice();
+        advanceTracePractice();
       }
       return;
     }
@@ -11640,7 +11789,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   });
   traceUndoButton.addEventListener("click", undoTraceStroke);
   traceClearButton.addEventListener("click", clearTracePad);
-  traceOkButton.addEventListener("click", closeTracePractice);
+  traceOkButton.addEventListener("click", advanceTracePractice);
 
   retryButton.addEventListener("click", startSession);
   document.addEventListener("pointerdown", (event) => {
