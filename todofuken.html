@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.18.0" />
+    <meta name="application-version" content="1.18.1" />
     <style>
 :root {
   color-scheme: dark;
@@ -2142,7 +2142,7 @@ input:focus-visible,
 /* v1.14.0: visual-viewport based portable layout and overflow-safe dialogs */
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
-/* v1.18.0: retry slot reset, independent candidate confirmation, component-aware Han verification */
+/* v1.18.1: v1.17 recognition baseline restored; retry always starts at the first slot */
 .result-box,
 .review-menu,
 .result-list {
@@ -3831,7 +3831,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const STABILITY_CONFIRM_DELAY_MS = 260;
   const STABILITY_MIN_CONFIRMATIONS = 2;
   const COMPLEX_STROKE_STABILITY_THRESHOLD = 12;
-  const HAN_STABILITY_STROKE_THRESHOLD = 7;
   const MAX_SESSION_QUESTIONS = 10;
   const ANSWER_SLOT_COUNT = 10;
   const RESULT_REVEAL_INTERVAL_MS = 280;
@@ -3884,10 +3883,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const SMALL_KANA_AMBIGUOUS_PENALTY = 0.56;
   const SMALL_KANA_DEFAULT_PENALTY = 1.02;
   const LOCAL_HAN_FALLBACK_PENALTY = 0.46;
-  const LOCAL_HAN_UNCORROBORATED_PENALTY = 0.12;
   const LOCAL_HAN_OUT_OF_CORPUS_PENALTY = 0.16;
   const LOCAL_HAN_FALLBACK_LIMIT = 24;
-  const LOCAL_HAN_FALLBACK_SCORE_LIMIT = 3.4;
+  const LOCAL_HAN_FALLBACK_SCORE_LIMIT = 2.95;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
   const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
@@ -4082,34 +4080,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   // そのため方向規則ではなく、交差・配置など完成字形の位相だけを検査する。
   const KI_COMPONENT_SUFFIX_CHARS = new Set(Array.from("幾機畿磯譏饑"));
 
-  // へん・かんむり・構えは、候補字そのものではなく同じ配置を共有する部品族として扱う。
-  // 先頭・末尾の標準的な筆順だけを使い、接触やはね等の小差は判定条件に含めない。
-  const NINBEN_PREFIX_CHARS = new Set(Array.from(
-    "仁仏仕付代休体何作住位佐佑伴伸似伺但低佳例侍供依価侮侯侵便係促俊俗保信修俳俵個倍候借値倫偉偏停健側偶備催伝傷傾働像億優",
-  ));
-  const YAMAHEN_PREFIX_CHARS = new Set(Array.from(
-    "岐岬峠峡峰峻崎嶋嶺",
-  ));
-  const SHIMESUHEN_PREFIX_CHARS = new Set(Array.from(
-    "礼社祈祉祝神祖祥禍福",
-  ));
-  const KOZATOHEN_PREFIX_CHARS = new Set(Array.from(
-    "防阻附限陣院除陥降陰険陳陵陶陸陽隊階隔際障隠",
-  ));
-  const GYOUNINBEN_PREFIX_CHARS = new Set(Array.from(
-    "役彼往征径待律後徒従得御復循微徳徴徹",
-  ));
-  const NOGIHEN_PREFIX_CHARS = new Set(Array.from(
-    "私秋科秒秘租秩称移税程稚種稲稿穂積穏",
-  ));
-  const DOUGAMAE_PREFIX_CHARS = new Set(Array.from(
-    "内円同肉岡周用冊冏",
-  ));
-  const KINZUKURI_SUFFIX_CHARS = new Set(Array.from("新斬断"));
-  const YAMA_SUFFIX_CHARS = new Set(Array.from("岳島"));
-  const UPPER_ME_COMPONENT_CHARS = new Set(Array.from("県"));
-  const DAI_UPPER_COMPONENT_CHARS = new Set(Array.from("奈"));
-
   const CONTRASTIVE_COMPONENT_RULES = Object.freeze([
     {
       id: "kan-upper-layout-soft",
@@ -4186,76 +4156,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       id: "ennyou-not-shinnyou",
       applies: (text) => ENNYOU_COMPONENT_CHARS.has(text),
       test: evaluateEnnyouAgainstShinnyou,
-    },
-    {
-      id: "ninben-left-layout",
-      applies: (text) => NINBEN_PREFIX_CHARS.has(text),
-      test: () => evaluateLeftComponentLayout(2, { expectedBonus: 0.46 }),
-    },
-    {
-      id: "yamahen-left-layout",
-      applies: (text) => YAMAHEN_PREFIX_CHARS.has(text),
-      test: () => evaluateLeftComponentLayout(3, { expectedBonus: 0.52 }),
-    },
-    {
-      id: "shimesuhen-left-layout",
-      applies: (text) => SHIMESUHEN_PREFIX_CHARS.has(text),
-      test: () => evaluateLeftComponentLayout(4, { expectedBonus: 0.52 }),
-    },
-    {
-      id: "kozatohen-left-layout",
-      applies: (text) => KOZATOHEN_PREFIX_CHARS.has(text),
-      test: () => evaluateLeftComponentLayout(3, { expectedBonus: 0.56 }),
-    },
-    {
-      id: "gyouninben-left-layout",
-      applies: (text) => GYOUNINBEN_PREFIX_CHARS.has(text),
-      test: () => evaluateLeftComponentLayout(3, { expectedBonus: 0.5 }),
-    },
-    {
-      id: "nogihen-left-layout",
-      applies: (text) => NOGIHEN_PREFIX_CHARS.has(text),
-      test: () => evaluateLeftComponentLayout(5, { expectedBonus: 0.48 }),
-    },
-    {
-      id: "dougamae-outer-frame",
-      applies: (text) => DOUGAMAE_PREFIX_CHARS.has(text),
-      test: evaluateDougamaeOuterFrame,
-    },
-    {
-      id: "kinzukuri-right-layout",
-      applies: (text) => KINZUKURI_SUFFIX_CHARS.has(text),
-      test: () => evaluateRightComponentLayout(4, { expectedBonus: 0.55 }),
-    },
-    {
-      id: "yama-bottom-layout",
-      applies: (text) => YAMA_SUFFIX_CHARS.has(text),
-      test: () => evaluateBottomComponentLayout(3, { expectedBonus: 0.52 }),
-    },
-    {
-      id: "upper-me-lower-layout",
-      applies: (text) => UPPER_ME_COMPONENT_CHARS.has(text),
-      test: () => evaluateUpperThenLowerLayout(5, { expectedBonus: 0.58 }),
-    },
-    {
-      id: "dai-upper-directional-layout",
-      applies: (text) => DAI_UPPER_COMPONENT_CHARS.has(text),
-      test: evaluateDaiUpperComponent,
-    },
-    {
-      id: "shinnyou-observed-evidence",
-      applies: hasShinnyouChar,
-      test: () => evaluateCompletedComponentEvidence(hasCompletedShinnyouSweep, 0.62),
-    },
-    {
-      id: "sanzui-observed-evidence",
-      applies: hasSanzuiChar,
-      test: () => evaluateCompletedComponentEvidence(hasCompletedSanzui, 0.5),
-    },
-    {
-      id: "kusakanmuri-observed-evidence",
-      applies: hasKusakanmuriChar,
-      test: () => evaluateCompletedComponentEvidence(hasCompletedKusakanmuriTop, 0.62),
     },
     {
       id: "direction-sen-falling-pair",
@@ -8055,142 +7955,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         ),
         CONTRASTIVE_COMPONENT_RULES.map((rule) => rule.id),
       );
-
-      state.strokes = [
-        [{ x: 20, y: 18 }, { x: 18, y: 82 }],
-        [{ x: 18, y: 34 }, { x: 42, y: 34 }, { x: 42, y: 72 }],
-        [{ x: 18, y: 70 }, { x: 44, y: 70 }],
-        [{ x: 66, y: 20 }, { x: 112, y: 20 }],
-        [{ x: 88, y: 20 }, { x: 88, y: 105 }],
-        [{ x: 62, y: 58 }, { x: 112, y: 58 }],
-        [{ x: 64, y: 92 }, { x: 110, y: 92 }],
-      ];
-      add(
-        "component-layout-accepts-left-yamahen-band",
-        evaluateLeftComponentLayout(3).status === "expected",
-        evaluateLeftComponentLayout(3),
-      );
-      state.strokes[2] = [{ x: 18, y: 70 }, { x: 114, y: 70 }];
-      add(
-        "component-layout-rejects-prefix-spanning-whole-character",
-        evaluateLeftComponentLayout(3).hardReject === true,
-        evaluateLeftComponentLayout(3),
-      );
-
-      state.strokes = [
-        [{ x: 18, y: 18 }, { x: 18, y: 112 }],
-        [{ x: 18, y: 18 }, { x: 114, y: 18 }, { x: 114, y: 112 }],
-        [{ x: 48, y: 48 }, { x: 86, y: 48 }],
-        [{ x: 66, y: 36 }, { x: 66, y: 92 }],
-        [{ x: 44, y: 88 }, { x: 90, y: 88 }],
-      ];
-      add(
-        "component-layout-accepts-dougamae-frame",
-        evaluateDougamaeOuterFrame().status === "expected",
-        evaluateDougamaeOuterFrame(),
-      );
-      state.strokes[0] = [{ x: 18, y: 18 }, { x: 58, y: 18 }];
-      add(
-        "component-layout-rejects-missing-dougamae-frame",
-        evaluateDougamaeOuterFrame().hardReject === true,
-        evaluateDougamaeOuterFrame(),
-      );
-
-      state.strokes = [
-        [{ x: 18, y: 22 }, { x: 52, y: 22 }],
-        [{ x: 22, y: 46 }, { x: 58, y: 46 }],
-        [{ x: 20, y: 72 }, { x: 56, y: 72 }],
-        [{ x: 24, y: 98 }, { x: 60, y: 98 }],
-        [{ x: 42, y: 18 }, { x: 42, y: 108 }],
-        [{ x: 76, y: 20 }, { x: 116, y: 20 }],
-        [{ x: 94, y: 18 }, { x: 82, y: 108 }],
-        [{ x: 76, y: 60 }, { x: 112, y: 60 }],
-        [{ x: 86, y: 60 }, { x: 116, y: 104 }],
-      ];
-      add(
-        "component-layout-accepts-right-kinzukuri-band",
-        evaluateRightComponentLayout(4).status === "expected",
-        evaluateRightComponentLayout(4),
-      );
-
-      state.strokes = [
-        [{ x: 34, y: 22 }, { x: 96, y: 22 }],
-        [{ x: 66, y: 22 }, { x: 26, y: 66 }],
-        [{ x: 66, y: 22 }, { x: 108, y: 66 }],
-        [{ x: 42, y: 74 }, { x: 92, y: 74 }],
-        [{ x: 28, y: 88 }, { x: 108, y: 88 }],
-        [{ x: 66, y: 76 }, { x: 66, y: 112 }],
-        [{ x: 54, y: 96 }, { x: 42, y: 108 }],
-        [{ x: 78, y: 96 }, { x: 92, y: 108 }],
-      ];
-      add(
-        "component-layout-accepts-upper-dai-falling-pair",
-        evaluateDaiUpperComponent().status === "expected",
-        evaluateDaiUpperComponent(),
-      );
-      state.strokes[1] = [{ x: 66, y: 22 }, { x: 66, y: 66 }];
-      state.strokes[2] = [{ x: 34, y: 48 }, { x: 96, y: 48 }];
-      add(
-        "component-layout-rejects-missing-upper-dai-pair",
-        evaluateDaiUpperComponent().hardReject === true,
-        evaluateDaiUpperComponent(),
-      );
     } finally {
       state.strokes = contrastivePreviousStrokes;
-    }
-
-    const stabilityPreviousMode = state.recognitionModeOverride;
-    const stabilityPreviousResponseKind = state.recognitionResponseKindOverride;
-    const stabilityPreviousStrokes = state.strokes;
-    try {
-      state.recognitionModeOverride = "character";
-      state.recognitionResponseKindOverride = "writing";
-      add(
-        "completed-seven-stroke-han-requires-stability",
-        requiresCandidateStability("体", { rawCount: 7, virtualCount: 7 }),
-      );
-      add(
-        "pending-candidate-is-not-cacheable",
-        !canCacheRecognitionDecision({ text: "体", pending: true }) &&
-          canCacheRecognitionDecision({ text: "体", pending: false }),
-      );
-      add(
-        "uncorroborated-complex-han-requests-local-verification",
-        shouldVerifyUncorroboratedHan({
-          accepted: [{ text: "体", crossEngineConsensus: false, independentVariantCount: 1 }],
-        }, { rawCount: 7, virtualCount: 7 }),
-      );
-      add(
-        "local-glyph-variant-is-not-independent-consensus",
-        !hasIndependentCandidateSupport({
-          crossEngineConsensus: false,
-          variantCount: 2,
-          independentVariantCount: 1,
-        }),
-      );
-      state.strokes = [
-        [{ x: 18, y: 24 }, { x: 112, y: 24 }],
-        [{ x: 42, y: 10 }, { x: 42, y: 42 }],
-        [{ x: 86, y: 10 }, { x: 86, y: 42 }],
-        [{ x: 32, y: 62 }, { x: 98, y: 62 }],
-        [{ x: 64, y: 48 }, { x: 64, y: 108 }],
-        [{ x: 34, y: 92 }, { x: 98, y: 92 }],
-      ];
-      const kusaWrongEvidence = evaluateObservedCandidateComponentEvidence(
-        "富", { rawCount: 6, virtualCount: 6 },
-      );
-      const kusaExpectedEvidence = evaluateObservedCandidateComponentEvidence(
-        "葉", { rawCount: 6, virtualCount: 6 },
-      );
-      add(
-        "observed-kusakanmuri-penalizes-non-grass-candidate",
-        kusaWrongEvidence.penalty >= 1 && kusaExpectedEvidence.penalty === 0,
-        { kusaWrongEvidence, kusaExpectedEvidence },
-      );
-    } finally {
-      state.recognitionModeOverride = stabilityPreviousMode;
-      state.recognitionResponseKindOverride = stabilityPreviousResponseKind;
-      state.strokes = stabilityPreviousStrokes;
     }
 
     add(
@@ -8803,216 +8569,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     };
   }
 
-  function createContrastiveDecision(status, details = {}, penalty = 0, expectedBonus = 0) {
+  function createContrastiveDecision(status, details = {}, penalty = 0) {
     return {
       status,
       hardReject: status === "competing",
-      penalty: status === "ambiguous"
-        ? penalty
-        : status === "expected"
-          ? -Math.max(0, expectedBonus)
-          : 0,
+      penalty: status === "ambiguous" ? penalty : 0,
       details,
     };
-  }
-
-  function getRelativeComponentLayout(startIndex, count) {
-    const whole = getInkBounds();
-    const component = getStrokeGroupBounds(startIndex, count);
-    const remainder = getStrokesBounds([
-      ...state.strokes.slice(0, startIndex),
-      ...state.strokes.slice(startIndex + count),
-    ]);
-    if (!whole || !component || !remainder || state.strokes.length <= count) {
-      return null;
-    }
-    return {
-      whole,
-      component,
-      remainder,
-      componentCenterX: component.left + component.width / 2,
-      componentCenterY: component.top + component.height / 2,
-      remainderCenterX: remainder.left + remainder.width / 2,
-      remainderCenterY: remainder.top + remainder.height / 2,
-    };
-  }
-
-  function evaluateLeftComponentLayout(count, { expectedBonus = 0.46 } = {}) {
-    const layout = getRelativeComponentLayout(0, count);
-    if (!layout) {
-      return createContrastiveDecision("unavailable");
-    }
-    const { whole, component, componentCenterX, remainderCenterX } = layout;
-    const rightRatio = (component.right - whole.left) / whole.width;
-    const widthRatio = component.width / whole.width;
-    const separationRatio = (remainderCenterX - componentCenterX) / whole.width;
-    const details = { count, rightRatio, widthRatio, separationRatio };
-
-    // へんの筆画が字幅の大半へ広がる場合は、別部品の先頭画を取り込んでいる。
-    if (rightRatio >= 0.72 || widthRatio >= 0.65 || separationRatio <= -0.02) {
-      return createContrastiveDecision("competing", details);
-    }
-    if (rightRatio <= 0.54 && widthRatio <= 0.5 && separationRatio >= 0.1) {
-      return createContrastiveDecision("expected", details, 0, expectedBonus);
-    }
-    return createContrastiveDecision("ambiguous", details, 0.14);
-  }
-
-  function evaluateRightComponentLayout(count, { expectedBonus = 0.5 } = {}) {
-    const startIndex = Math.max(0, state.strokes.length - count);
-    const layout = getRelativeComponentLayout(startIndex, count);
-    if (!layout) {
-      return createContrastiveDecision("unavailable");
-    }
-    const { whole, component, componentCenterX, remainderCenterX } = layout;
-    const leftRatio = (component.left - whole.left) / whole.width;
-    const widthRatio = component.width / whole.width;
-    const separationRatio = (componentCenterX - remainderCenterX) / whole.width;
-    const details = { count, leftRatio, widthRatio, separationRatio };
-
-    if (leftRatio <= 0.25 || widthRatio >= 0.72 || separationRatio <= -0.02) {
-      return createContrastiveDecision("competing", details);
-    }
-    if (leftRatio >= 0.44 && widthRatio <= 0.58 && separationRatio >= 0.1) {
-      return createContrastiveDecision("expected", details, 0, expectedBonus);
-    }
-    return createContrastiveDecision("ambiguous", details, 0.16);
-  }
-
-  function evaluateBottomComponentLayout(count, { expectedBonus = 0.48 } = {}) {
-    const startIndex = Math.max(0, state.strokes.length - count);
-    const layout = getRelativeComponentLayout(startIndex, count);
-    if (!layout) {
-      return createContrastiveDecision("unavailable");
-    }
-    const { whole, component, componentCenterY, remainderCenterY } = layout;
-    const topRatio = (component.top - whole.top) / whole.height;
-    const heightRatio = component.height / whole.height;
-    const separationRatio = (componentCenterY - remainderCenterY) / whole.height;
-    const details = { count, topRatio, heightRatio, separationRatio };
-
-    if (topRatio <= 0.35 || separationRatio <= -0.02) {
-      return createContrastiveDecision("competing", details);
-    }
-    if (topRatio >= 0.55 && heightRatio <= 0.46 && separationRatio >= 0.12) {
-      return createContrastiveDecision("expected", details, 0, expectedBonus);
-    }
-    return createContrastiveDecision("ambiguous", details, 0.14);
-  }
-
-  function evaluateUpperThenLowerLayout(prefixCount, { expectedBonus = 0.5 } = {}) {
-    const layout = getRelativeComponentLayout(0, prefixCount);
-    if (!layout) {
-      return createContrastiveDecision("unavailable");
-    }
-    const { whole, component, remainder, componentCenterY, remainderCenterY } = layout;
-    const upperBottomRatio = (component.bottom - whole.top) / whole.height;
-    const lowerTopRatio = (remainder.top - whole.top) / whole.height;
-    const separationRatio = (remainderCenterY - componentCenterY) / whole.height;
-    const details = { prefixCount, upperBottomRatio, lowerTopRatio, separationRatio };
-
-    if (separationRatio <= -0.04 || lowerTopRatio <= 0.18) {
-      return createContrastiveDecision("competing", details);
-    }
-    if (upperBottomRatio <= 0.76 && lowerTopRatio >= 0.42 && separationRatio >= 0.1) {
-      return createContrastiveDecision("expected", details, 0, expectedBonus);
-    }
-    return createContrastiveDecision("ambiguous", details, 0.13);
-  }
-
-  function evaluateDaiUpperComponent() {
-    const layout = getRelativeComponentLayout(0, 3);
-    const data = getComponentData(0, 3);
-    if (!layout || !data) {
-      return createContrastiveDecision("unavailable");
-    }
-    const [horizontal, leftSweep, rightSweep] = data.geometries;
-    if (!horizontal || !leftSweep || !rightSweep) {
-      return createContrastiveDecision("unavailable");
-    }
-    const { whole, component, componentCenterY, remainderCenterY } = layout;
-    const horizontalLike = horizontal.width >= horizontal.height * 1.45;
-    const leftDx = leftSweep.end.x - leftSweep.start.x;
-    const leftDy = leftSweep.end.y - leftSweep.start.y;
-    const rightDx = rightSweep.end.x - rightSweep.start.x;
-    const rightDy = rightSweep.end.y - rightSweep.start.y;
-    const leftFalling = leftDx <= -whole.width * 0.08 && leftDy >= whole.height * 0.1;
-    const rightFalling = rightDx >= whole.width * 0.08 && rightDy >= whole.height * 0.1;
-    const upperBottomRatio = (component.bottom - whole.top) / whole.height;
-    const lowerSeparationRatio = (remainderCenterY - componentCenterY) / whole.height;
-    const details = {
-      horizontalLike,
-      leftDx,
-      leftDy,
-      rightDx,
-      rightDy,
-      leftFalling,
-      rightFalling,
-      upperBottomRatio,
-      lowerSeparationRatio,
-    };
-    if (
-      horizontalLike &&
-      leftFalling &&
-      rightFalling &&
-      upperBottomRatio <= 0.7 &&
-      lowerSeparationRatio >= 0.08
-    ) {
-      return createContrastiveDecision("expected", details, 0, 0.56);
-    }
-    if (!horizontalLike || (!leftFalling && !rightFalling)) {
-      return createContrastiveDecision("competing", details);
-    }
-    return createContrastiveDecision("ambiguous", details, 0.18);
-  }
-
-  function evaluateDougamaeOuterFrame() {
-    const whole = getInkBounds();
-    const leftStroke = getStrokeGeometry(state.strokes[0]);
-    const foldedStroke = getStrokeGeometry(state.strokes[1]);
-    if (!whole || !leftStroke || !foldedStroke || state.strokes.length <= 2) {
-      return createContrastiveDecision("unavailable");
-    }
-    const leftHeightRatio = leftStroke.height / whole.height;
-    const leftPositionRatio = (leftStroke.centerX - whole.left) / whole.width;
-    const frameWidthRatio = foldedStroke.width / whole.width;
-    const frameHeightRatio = foldedStroke.height / whole.height;
-    const frameRightRatio = (foldedStroke.right - whole.left) / whole.width;
-    const frameTopRatio = (foldedStroke.top - whole.top) / whole.height;
-    const details = {
-      leftHeightRatio,
-      leftPositionRatio,
-      frameWidthRatio,
-      frameHeightRatio,
-      frameRightRatio,
-      frameTopRatio,
-    };
-    const expected =
-      leftHeightRatio >= 0.5 &&
-      leftPositionRatio <= 0.3 &&
-      frameWidthRatio >= 0.54 &&
-      frameHeightRatio >= 0.42 &&
-      frameRightRatio >= 0.76 &&
-      frameTopRatio <= 0.24;
-    if (expected) {
-      return createContrastiveDecision("expected", details, 0, 0.62);
-    }
-    const clearlyMissing =
-      leftHeightRatio < 0.28 ||
-      leftPositionRatio > 0.46 ||
-      frameWidthRatio < 0.34 ||
-      frameHeightRatio < 0.22 ||
-      frameRightRatio < 0.58;
-    if (clearlyMissing) {
-      return createContrastiveDecision("competing", details);
-    }
-    return createContrastiveDecision("ambiguous", details, 0.18);
-  }
-
-  function evaluateCompletedComponentEvidence(test, expectedBonus) {
-    return test()
-      ? createContrastiveDecision("expected", {}, 0, expectedBonus)
-      : createContrastiveDecision("unavailable");
   }
 
   function evaluateHorizontalLengthContrast(startIndex, upperOffset, lowerOffset, expected) {
@@ -10171,7 +9734,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   const KUSAKANMURI_CHARS = new Set(
     Array.from(
-      "花芳芸芽苗若苦英茂茎草荒荘荷菊菌菓菜華菩萎著葉葬蒸蓄蔵薄薦薫薬藩藤藍蘇蘭漢范",
+      "花芳芸芽苗若苦英茂茎草荒荘荷菊菌菓菜華菩萎著葬蒸蓄蔵薄薦薫薬藩藤藍蘇蘭漢范",
     ),
   );
 
@@ -10211,31 +9774,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return horizontal && verticalishMarks >= 2;
   }
 
-  function evaluateObservedCandidateComponentEvidence(text, strokeStats) {
-    const rawCount = Number(strokeStats?.rawCount);
-    if (
-      isFreeMode() ||
-      isReadingResponse() ||
-      !Number.isFinite(rawCount) ||
-      rawCount < 6 ||
-      getCharacterLength(text) !== 1 ||
-      !isCjkIdeograph(text)
-    ) {
-      return { penalty: 0, mismatches: [] };
-    }
-
-    const mismatches = [];
-    let penalty = 0;
-    if (hasCompletedKusakanmuriTop() && !hasKusakanmuriChar(text)) {
-      mismatches.push("observed-kusakanmuri");
-      penalty += 1.05;
-    }
-    return {
-      penalty: Math.round(Math.min(1.25, penalty) * 1000) / 1000,
-      mismatches,
-    };
-  }
-
   function getAllowedRawShortfall() {
     // 一文字枠では標準的な筆の上げ下げを学習対象にする。
     // 任意の曲がりを「結合された二画」とみなすと、別の場所にある不足画まで
@@ -10259,7 +9797,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       unknownStrokeCount: false,
       structure: evaluateRequiredCandidateStructure(text),
       contrastiveStructure: evaluateContrastiveCandidateStructure(text),
-      observedComponentEvidence: evaluateObservedCandidateComponentEvidence(text, strokeStats),
     };
 
     if (!expectedRange) {
@@ -10295,12 +9832,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
 
     result.scorePenalty += result.contrastiveStructure.penalty;
-    result.scorePenalty += result.observedComponentEvidence.penalty;
-    if (result.observedComponentEvidence.mismatches.length > 0) {
-      result.warnings.push(...result.observedComponentEvidence.mismatches.map(
-        (id) => `component-mismatch:${id}`,
-      ));
-    }
     if (!result.contrastiveStructure.pass) {
       result.pass = false;
       result.reasons.push(...result.contrastiveStructure.failedRuleIds.map(
@@ -10382,15 +9913,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       if (result.glyphShape.available) {
         result.scorePenalty += result.glyphShape.penalty;
         if (result.glyphShape.hardReject) {
-          const componentEvidenceOverridesCoarseGlyph =
-            result.contrastiveStructure.penalty <= -0.45 &&
-            !result.glyphShape.displacedStroke?.hardReject;
-          if (componentEvidenceOverridesCoarseGlyph) {
-            result.warnings.push("glyph-shape-overridden-by-component-evidence");
-          } else {
-            result.pass = false;
-            result.reasons.push("glyph-shape-mismatch");
-          }
+          result.pass = false;
+          result.reasons.push("glyph-shape-mismatch");
         }
       }
     }
@@ -10904,36 +10428,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function shouldTryLocalHanFallback(evaluation) {
     if (isReadingResponse() || isFreeMode()) return false;
     const top = evaluation?.accepted?.[0];
-    const strokeStats = top?.effectiveStrokeStats || estimateInputStrokeStats();
     const topIsProjectHan = Boolean(top && isCjkIdeograph(top.text) && getLocalHanRecognitionUniverseSet().has(top.text));
     return (
       !top ||
       !isCandidateEvaluationDecisive(evaluation) ||
       !isCjkIdeograph(top.text) ||
       !topIsProjectHan ||
-      shouldVerifyUncorroboratedHan(evaluation, strokeStats) ||
-      top.observedComponentPenalty >= 0.45 ||
       (top.glyphShape?.available && top.glyphShape.penalty >= 0.54)
-    );
-  }
-
-  function hasIndependentCandidateSupport(candidate) {
-    return Boolean(
-      candidate?.crossEngineConsensus ||
-      Number(candidate?.independentVariantCount || 0) >= 2
-    );
-  }
-
-  function shouldVerifyUncorroboratedHan(evaluation, strokeStats = estimateInputStrokeStats()) {
-    const top = evaluation?.accepted?.[0];
-    const rawCount = Number(strokeStats?.rawCount);
-    return Boolean(
-      top &&
-      Number.isFinite(rawCount) &&
-      rawCount >= 6 &&
-      getCharacterLength(top.text) === 1 &&
-      isCjkIdeograph(top.text) &&
-      !hasIndependentCandidateSupport(top)
     );
   }
 
@@ -11104,9 +10605,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         : memberships;
       const engines = new Set(scoringMemberships.map((item) => item.source));
       const variants = new Set(scoringMemberships.map((item) => `${item.source}:${item.variant}`));
-      const independentVariants = new Set(scoringMemberships
-        .filter((item) => item.source !== "local-han" && item.source !== "local-kana")
-        .map((item) => `${item.source}:${item.variant}`));
       const crossEngineConsensus = engines.has("native") && engines.has("google");
       const bestSourceRank = Math.min(...scoringMemberships.map((item) => item.rank));
       const sourceRankPenalty = Math.min(
@@ -11116,7 +10614,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       );
       const consensusBonus = crossEngineConsensus
         ? RECOGNITION_CROSS_ENGINE_BONUS
-        : independentVariants.size >= 2
+        : variants.size >= 2
           ? RECOGNITION_MULTI_VARIANT_BONUS
           : 0;
 
@@ -11154,8 +10652,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         warnings: compatibility.warnings || [],
         expectedRange: compatibility.expectedRange,
         structure: compatibility.structure,
-        observedComponentEvidence: compatibility.observedComponentEvidence || null,
-        observedComponentPenalty: Number(compatibility.observedComponentEvidence?.penalty) || 0,
         glyphShape: compatibility.glyphShape || null,
         unknownStrokeCount: Boolean(compatibility.unknownStrokeCount),
         spatial,
@@ -11163,7 +10659,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         effectiveStrokeStats,
         crossEngineConsensus,
         variantCount: variants.size,
-        independentVariantCount: independentVariants.size,
         repairSupported: repairMemberships.length > 0,
         repairRequired: repairMemberships.length > 0 && nonRepairMemberships.length === 0,
         selectedVariant: selectedMembershipCompatibility?.membership?.variant || "",
@@ -11272,14 +10767,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function requiresCandidateStability(text, strokeStats) {
     const expectedCount = getCandidateStrokeCount(text);
-    const completedHanNeedsConfirmation =
-      getCharacterLength(text) === 1 &&
-      isCjkIdeograph(text) &&
-      strokeStats.rawCount >= HAN_STABILITY_STROKE_THRESHOLD;
 
     return (
       isFreeMode() ||
-      completedHanNeedsConfirmation ||
       hasShinnyouChar(text) ||
       hasSanzuiChar(text) ||
       hasKusakanmuriChar(text) ||
@@ -11327,10 +10817,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       pending: true,
       delay: STABILITY_CONFIRM_DELAY_MS,
     };
-  }
-
-  function canCacheRecognitionDecision(decision) {
-    return Boolean(decision?.text && !decision?.pending);
   }
 
   function getDragStartDistance(pointerType) {
@@ -11552,8 +11038,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         ensembleEvaluation = nativeEvaluation;
 
         const shouldConsultGoogle =
-          !isCandidateEvaluationDecisive(nativeEvaluation) ||
-          shouldVerifyUncorroboratedHan(nativeEvaluation, strokeStats);
+          !isCandidateEvaluationDecisive(nativeEvaluation);
 
         if (shouldConsultGoogle) {
           recognitionPath = nativeCandidates.length > 0
@@ -11650,15 +11135,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
               preFallbackTop?.glyphShape?.available &&
               (preFallbackTop.glyphShape.penalty >= 0.82 || preFallbackTop.glyphShape.score >= 0.16)
             );
-            const preFallbackCorroborated = hasIndependentCandidateSupport(preFallbackTop);
             sourceGroups.push({
               source: "local-han",
               variant: "educational-corpus-glyph",
-              penalty: !preFallbackCorroborated
-                ? LOCAL_HAN_UNCORROBORATED_PENALTY
-                : (!preFallbackInCorpus || preFallbackShapeWeak)
-                  ? LOCAL_HAN_OUT_OF_CORPUS_PENALTY
-                  : LOCAL_HAN_FALLBACK_PENALTY,
+              penalty: (!preFallbackInCorpus || preFallbackShapeWeak)
+                ? LOCAL_HAN_OUT_OF_CORPUS_PENALTY
+                : LOCAL_HAN_FALLBACK_PENALTY,
               candidates: localHanCandidates,
             });
             ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
@@ -11676,6 +11158,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           selectedText: text,
         };
 
+        if (text) {
+          state.recognitionCache = { fingerprint, text };
+        }
       }
 
       if (serial !== state.recognitionSerial || !hasMeaningfulInk()) {
@@ -11705,10 +11190,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         return;
       }
 
-      if (canCacheRecognitionDecision(decision)) {
-        // 安定確認を通過した候補だけを保存する。確認前に保存すると、次回評価が
-        // 外部認識器を通らず同じキャッシュを読むため「2回一致」が形骸化する。
-        state.recognitionCache = { fingerprint, text: decision.text };
+      if (decision.text) {
         setResult(decision.text, "result");
       } else {
         setResult(
@@ -12182,9 +11664,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const selected = selectSessionQuestions(state.questions);
     state.session = selected.map(createSessionItem);
     state.currentQuestionIndex = 0;
-    // goToProblem は遷移前状態を保存するため、旧セッションの枠番号をここで消す。
-    // これを先に行わないと「もっと」で新しい1問目へ入る際に、前回の選択枠が
-    // 新セッションの activeSlotIndex として書き戻される。
+    // goToProblem は遷移前状態を保存するため、旧セッションの枠番号を先に消す。
+    // 「もっと」で始めた新しい1問目は、常に先頭枠から入力する。
     state.activeSlotIndex = 0;
     state.resultsCommitted = false;
     learningScreen.hidden = false;
