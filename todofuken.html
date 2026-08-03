@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.16.0" />
+    <meta name="application-version" content="1.17.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -351,20 +351,34 @@ button {
   line-height: 1;
 }
 
+.slot-glyph {
+  display: inline-block;
+  max-width: 100%;
+  max-height: 100%;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .character-slot.is-small-kana {
-  font-size: clamp(0.92rem, 5vmin, 2.7rem);
+  font-size: inherit;
   font-weight: 850;
-  /* 認識欄そのものでも通常字との違いを学習者が確認できるよう、
-     横書きの小書き位置（左下）へ寄せて表示する。 */
-  place-items: end start;
-  padding: 11% 10% 13% 13%;
+  place-items: center;
+  padding: 0;
+}
+
+.character-slot.is-small-kana .slot-glyph {
+  position: absolute;
+  left: 13%;
+  bottom: 12%;
+  font-size: clamp(0.92rem, 5vmin, 2.7rem);
+  line-height: 1;
 }
 
 .character-slot.is-small-kana::after {
   content: "小";
   position: absolute;
   right: 5px;
-  bottom: 4px;
+  top: 5px;
   color: var(--muted);
   font-family: var(--educational-font);
   font-size: clamp(0.46rem, 1.2vmin, 0.62rem);
@@ -745,19 +759,21 @@ input:focus-visible,
   display: block;
   writing-mode: vertical-rl;
   text-orientation: upright;
-  white-space: nowrap;
-  word-break: keep-all;
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: normal;
   line-break: strict;
   place-self: center;
   max-width: 100%;
   max-height: 100%;
+  overflow: hidden;
   font-size: clamp(1rem, 3vmin, 1.66rem);
-  line-height: 1.72;
+  line-height: 1.62;
 }
 
 .app[data-layout="vertical-wide"] .question-part,
 .app[data-layout="vertical-portable"] .question-part {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .app[data-layout="vertical-wide"] .question-prompt,
@@ -802,10 +818,36 @@ input:focus-visible,
 
 .app[data-layout="vertical-wide"] .character-slot.is-small-kana,
 .app[data-layout="vertical-portable"] .character-slot.is-small-kana {
+  font-size: inherit;
+  place-items: center;
+  padding: 0;
+}
+
+.app[data-layout="vertical-wide"] .character-slot.is-small-kana .slot-glyph,
+.app[data-layout="vertical-portable"][data-portable-rotated="false"] .character-slot.is-small-kana .slot-glyph {
+  top: 12%;
+  right: 12%;
+  bottom: auto;
+  left: auto;
   font-size: clamp(0.9rem, 3.6vmin, 2.55rem);
-  /* 縦書きの小書き位置は右上。実際の書字規則と同じ位置で表示する。 */
-  place-items: start end;
-  padding: 12% 12% 10% 10%;
+}
+
+/* 縦書きでは、ポータブルの画面回転有無にかかわらず、
+   学習上のマス座標で右上へ置く。画面全体のCSS回転はこの配置ごと回転する。 */
+.app[data-layout="vertical-portable"][data-portable-rotated="true"] .character-slot.is-small-kana .slot-glyph {
+  top: 12%;
+  right: 12%;
+  left: auto;
+  bottom: auto;
+  font-size: clamp(0.9rem, 3.6vmin, 2.55rem);
+}
+
+.app[data-layout="vertical-wide"] .character-slot.is-small-kana::after,
+.app[data-layout="vertical-portable"] .character-slot.is-small-kana::after {
+  right: auto;
+  top: auto;
+  left: 5px;
+  bottom: 4px;
 }
 
 .app[data-layout="vertical-wide"] .pad-stage,
@@ -922,7 +964,7 @@ input:focus-visible,
   height: min(48dvh, 320px);
   max-height: none;
   display: flex;
-  flex-direction: row-reverse;
+  flex-direction: row;
   align-items: stretch;
   overflow-x: auto;
   overflow-y: hidden;
@@ -932,7 +974,6 @@ input:focus-visible,
 .app[data-layout="vertical-portable"][data-handedness="left"] .review-menu {
   right: auto;
   left: 0;
-  flex-direction: row;
 }
 
 .app[data-layout="vertical-wide"] .review-item,
@@ -2101,6 +2142,40 @@ input:focus-visible,
 /* v1.14.0: visual-viewport based portable layout and overflow-safe dialogs */
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
+/* v1.17.0: logical-quarter small kana, stable slot display, Android drag scrolling, sparse topology rescue */
+.result-box,
+.review-menu,
+.result-list {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+@media (pointer: coarse) {
+  .result-box,
+  .review-menu,
+  .result-list {
+    touch-action: none;
+  }
+}
+
+.result-box.is-drag-scrolling,
+.review-menu.is-drag-scrolling,
+.result-list.is-drag-scrolling {
+  scroll-behavior: auto !important;
+  scroll-snap-type: none !important;
+}
+
+.app[data-layout="vertical-wide"] .question-answer-panel,
+.app[data-layout="vertical-portable"] .question-answer-panel {
+  overflow: hidden;
+}
+
+.app[data-layout="vertical-wide"] .question-text,
+.app[data-layout="vertical-portable"] .question-text {
+  min-width: 0;
+  min-height: 0;
+}
+
 :root {
   --app-visual-width: 100vw;
   --app-visual-height: 100dvh;
@@ -4359,15 +4434,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function mapLogicalPointToVisualPad(point, guide = getCanvasGuide()) {
-    const logicalX = clampUnit(Number(point?.x) / Math.max(1, guide.width));
-    const logicalY = clampUnit(Number(point?.y) / Math.max(1, guide.height));
-    // vertical-portable を物理縦画面で使う場合、パッド全体は CSS で時計回りに回転する。
-    // 保存座標は回転前の論理座標なので、小書き位置の「右上／左下」は必ず
-    // ユーザーに見えている座標へ戻してから判定する。
-    if (isPortableRotationActive() && getPortableRotation() === "clockwise") {
-      return { x: clampUnit(1 - logicalY), y: logicalX };
-    }
-    return { x: logicalX, y: logicalY };
+    // 小書き位置は「学習者が使うマスそのもの」の座標で判定する。
+    // vertical-portable は画面全体をCSSで90度回転しているが、canvas座標は
+    // 既にその回転を逆変換した論理マス座標である。ここで再度回転すると、
+    // 右上と左上が入れ替わるため、回転補正は行わない。
+    return {
+      x: clampUnit(Number(point?.x) / Math.max(1, guide.width)),
+      y: clampUnit(Number(point?.y) / Math.max(1, guide.height)),
+    };
   }
 
   function getSmallKanaPlacementEvidence(strokes = state.strokes, guideOverride = null) {
@@ -4577,7 +4651,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       }
 
       if (record.text) {
-        slot.textContent = record.text;
+        const glyph = document.createElement("span");
+        glyph.className = "slot-glyph";
+        glyph.textContent = record.text;
+        slot.append(glyph);
         if (SMALL_KANA_PATTERN.test(record.text)) {
           slot.classList.add("is-small-kana");
           slot.setAttribute("aria-label", `${index + 1}文字目、小書きの${record.text}`);
@@ -4607,6 +4684,96 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       block: "nearest",
       inline: "nearest",
     });
+  }
+
+
+  function installTouchDragScroller(element) {
+    if (!element || element.dataset.dragScrollerInstalled === "true") {
+      return;
+    }
+    element.dataset.dragScrollerInstalled = "true";
+    let drag = null;
+    let suppressClickUntil = 0;
+
+    element.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "touch") {
+        return;
+      }
+      const canScrollX = element.scrollWidth > element.clientWidth + 2;
+      const canScrollY = element.scrollHeight > element.clientHeight + 2;
+      if (!canScrollX && !canScrollY) {
+        return;
+      }
+      drag = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        startLeft: element.scrollLeft,
+        startTop: element.scrollTop,
+        canScrollX,
+        canScrollY,
+        moved: false,
+      };
+      if (typeof element.setPointerCapture === "function") {
+        try {
+          element.setPointerCapture(event.pointerId);
+        } catch {}
+      }
+    }, { passive: true });
+
+    element.addEventListener("pointermove", (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) {
+        return;
+      }
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (!drag.moved && Math.hypot(dx, dy) < 5) {
+        return;
+      }
+      drag.moved = true;
+      element.classList.add("is-drag-scrolling");
+
+      // whole-screen rotate(90deg) 中は viewport の横移動が論理Yへ対応する。
+      const rotated = isPortableRotationActive();
+      const logicalDx = rotated ? dy : dx;
+      const logicalDy = rotated ? -dx : dy;
+      if (drag.canScrollX) {
+        element.scrollLeft = drag.startLeft - logicalDx;
+      }
+      if (drag.canScrollY) {
+        element.scrollTop = drag.startTop - logicalDy;
+      }
+      event.preventDefault();
+    }, { passive: false });
+
+    const finish = (event) => {
+      if (!drag || event.pointerId !== drag.pointerId) {
+        return;
+      }
+      if (drag.moved) {
+        suppressClickUntil = performance.now() + 180;
+      }
+      element.classList.remove("is-drag-scrolling");
+      if (
+        typeof element.hasPointerCapture === "function" &&
+        typeof element.releasePointerCapture === "function" &&
+        element.hasPointerCapture(event.pointerId)
+      ) {
+        try {
+          element.releasePointerCapture(event.pointerId);
+        } catch {}
+      }
+      drag = null;
+    };
+    element.addEventListener("pointerup", finish, { passive: true });
+    element.addEventListener("pointercancel", finish, { passive: true });
+
+    element.addEventListener("click", (event) => {
+      if (performance.now() < suppressClickUntil) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    }, true);
   }
 
   function setResult(text, stateName = "result") {
@@ -5017,7 +5184,6 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function getCanvasPoint(event) {
     const point = getCanvasCoordinates(event);
-
     return {
       ...point,
       t: Math.round(performance.now() - state.strokeStartTime),
@@ -6712,20 +6878,39 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const minGlyphCoverage = GLYPH_SHAPE_MIN_GLYPH_COVERAGE - Math.min(0.08, complexityAllowance * 2.1);
     // フォントと手書きの局所的な接触・突出差は、ここでは順位調整にとどめる。
     // 字体の弁別に関わる接続・長短・交差は contrastive structure 側で判定する。
-    const hardReject =
-      (
-        comparison.score >= hardScore + 0.045 &&
-        comparison.inkCoverage < minInkCoverage - 0.11 &&
-        comparison.glyphCoverage < minGlyphCoverage - 0.11
-      ) ||
-      comparison.inkCoverage < 0.34 ||
-      comparison.glyphCoverage < 0.3;
+    const sparseConnectedAgreement =
+      expectedCount <= 5 &&
+      comparison.componentCountDifference <= 1 &&
+      comparison.inkComponentCount <= 2 &&
+      comparison.glyphComponentCount <= 2 &&
+      comparison.holeDifference <= 0.01 &&
+      comparison.endpointDifference <= 0.65 &&
+      comparison.junctionDifference <= 0.8 &&
+      comparison.orientationDifference <= 0.62;
+    const hardReject = sparseConnectedAgreement
+      ? (
+          comparison.score >= hardScore + 0.095 &&
+          comparison.inkCoverage < Math.max(0.24, minInkCoverage - 0.18) &&
+          comparison.glyphCoverage < Math.max(0.22, minGlyphCoverage - 0.18)
+        )
+      : (
+          (
+            comparison.score >= hardScore + 0.045 &&
+            comparison.inkCoverage < minInkCoverage - 0.11 &&
+            comparison.glyphCoverage < minGlyphCoverage - 0.11
+          ) ||
+          comparison.inkCoverage < 0.34 ||
+          comparison.glyphCoverage < 0.3
+        );
     const displacedStroke = evaluateDisplacedStrokeEvidence(strokes, glyph, comparison);
+    const sparseConnectedScale = sparseConnectedAgreement ? 0.78 : 1;
     const penalty = Math.min(
       3.4,
-      Math.max(0, comparison.score - GLYPH_SHAPE_SCORE_FLOOR) * 10 +
-      Math.max(0, 0.78 - comparison.inkCoverage) * 0.9 +
-      Math.max(0, 0.70 - comparison.glyphCoverage) * 1.0 +
+      (
+        Math.max(0, comparison.score - GLYPH_SHAPE_SCORE_FLOOR) * 10 +
+        Math.max(0, 0.78 - comparison.inkCoverage) * 0.9 +
+        Math.max(0, 0.70 - comparison.glyphCoverage) * 1.0
+      ) * sparseConnectedScale +
       displacedStroke.penalty,
     );
     return {
@@ -7145,14 +7330,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     try {
       state.settings.layout = "vertical-portable";
       app.dataset.portableRotated = "true";
-      const visuallyUpperRight = mapLogicalPointToVisualPad(
-        { x: 20, y: 10 },
+      const logicalUpperRight = mapLogicalPointToVisualPad(
+        { x: 90, y: 10 },
         { width: 100, height: 100 },
       );
       add(
-        "portable-small-kana-uses-visual-not-logical-quadrant",
-        visuallyUpperRight.x > 0.85 && visuallyUpperRight.y < 0.25,
-        visuallyUpperRight,
+        "portable-small-kana-keeps-logical-pad-quadrant",
+        logicalUpperRight.x > 0.85 && logicalUpperRight.y < 0.25,
+        logicalUpperRight,
       );
     } finally {
       state.settings.layout = smallKanaPreviousLayout;
@@ -7212,6 +7397,35 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         horizontalCenter,
       );
     } finally {
+      state.settings.layout = "vertical-portable";
+      app.dataset.portableRotated = "true";
+      const portableRightTopQuarter = getSmallKanaPlacementEvidence(
+        [[
+          { x: 245, y: 40 },
+          { x: 280, y: 70 },
+          { x: 315, y: 110 },
+        ]],
+        { width: 360, height: 360 },
+      );
+      add(
+        "portable-small-kana-logical-right-top-quarter-is-decisive",
+        portableRightTopQuarter.quarterContained,
+        portableRightTopQuarter,
+      );
+      const portableLeftTopQuarter = getSmallKanaPlacementEvidence(
+        [[
+          { x: 40, y: 40 },
+          { x: 75, y: 75 },
+          { x: 110, y: 115 },
+        ]],
+        { width: 360, height: 360 },
+      );
+      add(
+        "portable-small-kana-logical-left-top-is-not-right-top",
+        !portableLeftTopQuarter.quarterContained,
+        portableLeftTopQuarter,
+      );
+
       state.settings.layout = smallKanaQuarterPreviousLayout;
       app.dataset.portableRotated = smallKanaQuarterPreviousRotation || "false";
     }
@@ -10162,13 +10376,37 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           Math.max(0, 0.52 - comparison.inkCoverage) * 0.25 +
           Math.max(0, 0.48 - comparison.glyphCoverage) * 0.25
         : Infinity;
+
+      // 戸・方・月など、少画数でも線が接して1つの骨格になる字では
+      // 「複数成分の配置」が使えない。そこで、閉領域・端点・分岐・方向分布が
+      // 一致する単一成分の字にも、活字輪郭の数ピクセル差を弱めた補助得点を用いる。
+      const canUseConnectedSparseTopology =
+        rawCount <= 5 &&
+        comparison.componentCountDifference <= 1 &&
+        comparison.inkComponentCount <= 2 &&
+        comparison.glyphComponentCount <= 2 &&
+        comparison.holeDifference <= 0.01;
+      const connectedSparseShapeScore = canUseConnectedSparseTopology
+        ? comparison.adjustedScore * 4.75 +
+          comparison.orientationDifference * 1.5 +
+          comparison.endpointDifference * 0.72 +
+          comparison.junctionDifference * 1.05 +
+          comparison.projectionDifference * 0.32 +
+          comparison.coarseDifference * 0.18 +
+          Math.max(0, 0.46 - comparison.inkCoverage) * 0.18 +
+          Math.max(0, 0.44 - comparison.glyphCoverage) * 0.18
+        : Infinity;
       const topologyRankingPenalty =
         comparison.componentCountDifference * 0.72 +
         comparison.endpointDifference * 0.34 +
         comparison.junctionDifference * 0.62 +
         comparison.holeDifference * 0.74 +
         comparison.orientationDifference * 0.18;
-      const shapeScore = Math.min(baseShapeScore, sparseShapeScore) + topologyRankingPenalty;
+      const shapeScore = Math.min(
+        baseShapeScore,
+        sparseShapeScore,
+        connectedSparseShapeScore,
+      ) + topologyRankingPenalty;
       // 接続成分・分岐・閉領域は、木/ホのような輪郭の近い別スクリプトも候補順位で区別する。
       // 画数が一致し、閉領域・端点・分岐の骨格構造も一致する場合は、
       // 活字と手書きの縦横比差だけで候補を落とさない。後段の構造検査・字形検査は維持する。
@@ -11302,14 +11540,35 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
       let size = Number.parseFloat(getComputedStyle(questionText).fontSize) || 22;
       let attempts = 0;
+      const minSize = isVerticalLayout() ? 10 : 11;
       while (
-        attempts < 12 &&
+        attempts < 24 &&
         (questionText.scrollHeight > maxHeight + 1 || questionText.scrollWidth > maxWidth + 1) &&
-        size > 12
+        size > minSize
       ) {
-        size -= 1;
-        questionText.style.fontSize = `${size}px`;
+        size -= 0.75;
+        questionText.style.fontSize = `${Math.max(minSize, size)}px`;
         attempts += 1;
+      }
+
+      // 回転・アドレスバー伸縮の直後は初回計測が1フレーム古い場合がある。
+      // まだ収まらないときだけ次フレームでもう一度微調整する。
+      if (questionText.scrollHeight > maxHeight + 1 || questionText.scrollWidth > maxWidth + 1) {
+        window.requestAnimationFrame(() => {
+          const h = questionText.clientHeight;
+          const w = questionText.clientWidth;
+          let retrySize = Number.parseFloat(getComputedStyle(questionText).fontSize) || minSize;
+          let retry = 0;
+          while (
+            retry < 10 &&
+            (questionText.scrollHeight > h + 1 || questionText.scrollWidth > w + 1) &&
+            retrySize > 9
+          ) {
+            retrySize -= 0.5;
+            questionText.style.fontSize = `${Math.max(9, retrySize)}px`;
+            retry += 1;
+          }
+        });
       }
     });
   }
@@ -11331,7 +11590,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function updateReviewMenu() {
     reviewMenu.replaceChildren();
     reviewMenu.style.setProperty("--review-count", String(Math.max(1, state.session.length)));
-    state.session.forEach((item, index) => {
+    const reviewEntries = state.session.map((item, index) => ({ item, index }));
+    if (isVerticalLayout() && state.settings.handedness !== "left") {
+      reviewEntries.reverse();
+    }
+    reviewEntries.forEach(({ item, index }) => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "review-item";
@@ -11357,6 +11620,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function setReviewMenuOpen(isOpen) {
     reviewMenu.hidden = !isOpen;
     reviewButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
+    if (isOpen && isVerticalLayout()) {
+      window.requestAnimationFrame(() => {
+        reviewMenu.scrollTop = 0;
+        reviewMenu.scrollLeft = state.settings.handedness === "left"
+          ? 0
+          : Math.max(0, reviewMenu.scrollWidth - reviewMenu.clientWidth);
+      });
+    }
   }
 
   function goToProblem(index, { recognizeIfNeeded = true } = {}) {
@@ -12538,6 +12809,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
   });
 
+  installTouchDragScroller(resultBox);
+  installTouchDragScroller(reviewMenu);
+  installTouchDragScroller(resultList);
+
   reviewButton.addEventListener("click", () => setReviewMenuOpen(reviewMenu.hidden));
   reviewMenu.addEventListener("click", (event) => {
     const item = event.target.closest(".review-item");
@@ -12598,41 +12873,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   });
   replayRecognitionCorpusButton?.addEventListener("click", replayImportedRecognitionCorpus);
 
-  const resultDragState = { active: false, pointerId: null, startAxis: 0, startScroll: 0, moved: false };
-
-  resultList.addEventListener("pointerdown", (event) => {
-    if (event.pointerType === "mouse" && event.button !== 0) return;
-    if (!isVerticalLayout()) return;
-    resultDragState.active = true;
-    resultDragState.pointerId = event.pointerId;
-    resultDragState.startAxis = isPortableRotationActive() ? event.clientY : event.clientX;
-    resultDragState.startScroll = resultList.scrollLeft;
-    resultDragState.moved = false;
-    resultList.setPointerCapture?.(event.pointerId);
-  });
-
-  resultList.addEventListener("pointermove", (event) => {
-    if (!resultDragState.active || resultDragState.pointerId !== event.pointerId) return;
-    const axis = isPortableRotationActive() ? event.clientY : event.clientX;
-    const delta = axis - resultDragState.startAxis;
-    if (Math.abs(delta) > 4) resultDragState.moved = true;
-    if (resultDragState.moved) {
-      resultList.scrollLeft = resultDragState.startScroll - delta;
-      if (event.cancelable) event.preventDefault();
-    }
-  }, { passive: false });
-
-  const finishResultDrag = (event) => {
-    if (resultDragState.pointerId !== event.pointerId) return;
-    resultDragState.active = false;
-    resultDragState.pointerId = null;
-    window.setTimeout(() => { resultDragState.moved = false; }, 0);
-  };
-  resultList.addEventListener("pointerup", finishResultDrag);
-  resultList.addEventListener("pointercancel", finishResultDrag);
-
   resultList.addEventListener("click", (event) => {
-    if (resultDragState.moved) return;
     const row = event.target.closest(".result-row");
     if (row) {
       openExplanation(Number(row.dataset.index));
