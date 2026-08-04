@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="1.19.0" />
+    <meta name="application-version" content="1.20.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2142,7 +2142,7 @@ input:focus-visible,
 /* v1.14.0: visual-viewport based portable layout and overflow-safe dialogs */
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
-/* v1.19.0: mixed-writing small kana and one-character trace practice */
+/* v1.20.0: ordered pointer sampling, final-endpoint capture, answer-independent small kana */
 .result-box,
 .review-menu,
 .result-list {
@@ -2556,6 +2556,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const INK_COLOR = "#f4f0df";
   const DRAG_START_DISTANCE_MOUSE = 8;
   const DRAG_START_DISTANCE_TOUCH = 10;
+  const POINTER_SAMPLE_TIME_EPSILON = 0.01;
+  const POINTER_SAMPLE_POINT_EPSILON = 0.35;
+  const POINTER_SAMPLE_REJOIN_EPSILON = 1.25;
   const MIN_RECOGNITION_INK_LENGTH = 36;
   const RECOGNITION_DRAW_DELAY_MS = 180;
   const RECOGNITION_FINISH_DELAY_MS = 55;
@@ -3055,6 +3058,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     strokeStartTime: 0,
     activeCanvasTransform: null,
     activeLineWidth: 0,
+    lastInputSampleTime: 0,
     slotMode: 1,
     activeSlotIndex: 0,
     slots: [createInputRecord()],
@@ -3119,6 +3123,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       canvasCssSize: { width: 0, height: 0 },
       activeCanvasTransform: null,
       activeLineWidth: 0,
+      lastInputSampleTime: 0,
     },
   };
 
@@ -3203,14 +3208,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return false;
     }
 
-    // 混合表記では、現在の解答位置が同じ大小ペアのかなである場合だけ
-    // 小書き配置を使う。漢字候補や無関係なかな候補の順位には触れない。
-    const expectedPair = getKanaSizePair(expectedText || getExpectedActiveAnswerCharacter());
-    return Boolean(
-      expectedPair &&
-      expectedPair.large === pair.large &&
-      expectedPair.small === pair.small
-    );
+    // 認識結果は正解文字から独立させる。混合表記でも、1文字枠へ書かれた
+    // 大小ペアのかな候補は配置で判定する。漢字候補の順位には触れない。
+    void expectedText;
+    return true;
   }
 
   function mapLogicalPointToVisualPad(point, guide = getCanvasGuide()) {
@@ -3973,6 +3974,126 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       ...point,
       t: Math.round(performance.now() - state.strokeStartTime),
     };
+  }
+
+  function getPointerSampleTime(sample) {
+    const value = Number(sample?.timeStamp);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  }
+
+  function getPointerSampleDistance(left, right) {
+    if (!left || !right) return Infinity;
+    return Math.hypot(
+      Number(left.x) - Number(right.x),
+      Number(left.y) - Number(right.y),
+    );
+  }
+
+  function pointerViewportSamplesMatch(left, right) {
+    if (!left || !right) return false;
+    const coordinatesMatch =
+      Math.hypot(
+        Number(left.clientX) - Number(right.clientX),
+        Number(left.clientY) - Number(right.clientY),
+      ) <= POINTER_SAMPLE_POINT_EPSILON;
+    const leftTime = getPointerSampleTime(left);
+    const rightTime = getPointerSampleTime(right);
+    const timesMatch =
+      leftTime === 0 ||
+      rightTime === 0 ||
+      Math.abs(leftTime - rightTime) <= POINTER_SAMPLE_TIME_EPSILON;
+    return coordinatesMatch && timesMatch;
+  }
+
+  function getPointerEventSamples(event) {
+    let coalesced = [];
+    if (typeof event?.getCoalescedEvents === "function") {
+      try {
+        coalesced = Array.from(event.getCoalescedEvents() || []);
+      } catch {
+        coalesced = [];
+      }
+    }
+
+    const samples = coalesced.filter((sample) =>
+      Number.isFinite(Number(sample?.clientX)) &&
+      Number.isFinite(Number(sample?.clientY))
+    );
+    if (
+      Number.isFinite(Number(event?.clientX)) &&
+      Number.isFinite(Number(event?.clientY)) &&
+      !samples.some((sample) => pointerViewportSamplesMatch(sample, event))
+    ) {
+      // 一部のブラウザは coalescedEvents に最新端点を含めない。
+      samples.push(event);
+    }
+    return samples;
+  }
+
+  function sanitizePointerPointBatch(
+    event,
+    mapPoint,
+    previousPoint = null,
+    lastSampleTime = 0,
+  ) {
+    const samples = getPointerEventSamples(event);
+    const entries = samples.map((sample, index) => ({
+      point: mapPoint(sample),
+      sampleTime: getPointerSampleTime(sample),
+      isEndpoint: sample === event,
+      index,
+    })).filter(({ point }) =>
+      Number.isFinite(Number(point?.x)) && Number.isFinite(Number(point?.y))
+    );
+    const reliableTimes = entries.length > 0 && entries.every(({ sampleTime }) => sampleTime > 0);
+    if (reliableTimes) {
+      entries.sort((left, right) =>
+        left.sampleTime - right.sampleTime || left.index - right.index
+      );
+    }
+
+    let candidates = entries;
+    if (reliableTimes && lastSampleTime > 0) {
+      const newer = entries.filter(({ sampleTime }) =>
+        sampleTime > lastSampleTime + POINTER_SAMPLE_TIME_EPSILON
+      );
+      if (newer.length > 0) {
+        candidates = newer;
+      } else {
+        // ミリ秒精度の粗い timestamp でも、現在イベントの端点だけは失わない。
+        const endpoint = [...entries].reverse().find(({ isEndpoint }) => isEndpoint);
+        candidates = endpoint &&
+          endpoint.sampleTime >= lastSampleTime - POINTER_SAMPLE_TIME_EPSILON &&
+          getPointerSampleDistance(endpoint.point, previousPoint) > POINTER_SAMPLE_POINT_EPSILON
+          ? [endpoint]
+          : [];
+      }
+    } else if (previousPoint && candidates.length > 0) {
+      // timestamp が利用できない環境では、直前点と重なる最後の標本より後だけを採る。
+      let rejoinIndex = -1;
+      candidates.forEach(({ point }, index) => {
+        if (getPointerSampleDistance(point, previousPoint) <= POINTER_SAMPLE_REJOIN_EPSILON) {
+          rejoinIndex = index;
+        }
+      });
+      if (rejoinIndex >= 0) {
+        candidates = candidates.slice(rejoinIndex + 1);
+      }
+    }
+
+    const points = [];
+    let lastPoint = previousPoint;
+    let nextSampleTime = lastSampleTime;
+    candidates.forEach(({ point, sampleTime }) => {
+      if (getPointerSampleDistance(point, lastPoint) <= POINTER_SAMPLE_POINT_EPSILON) {
+        nextSampleTime = Math.max(nextSampleTime, sampleTime);
+        return;
+      }
+      points.push(point);
+      lastPoint = point;
+      nextSampleTime = Math.max(nextSampleTime, sampleTime);
+    });
+    return { points, lastSampleTime: nextSampleTime };
   }
 
   function clampUnit(value) {
@@ -6267,10 +6388,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       );
       state.recognitionResponseKindOverride = "writing";
       add(
-        "mixed-writing-small-kana-enables-matching-size-pair-only",
+        "mixed-writing-small-kana-is-independent-of-answer-character",
         isKanaSizePlacementEligible("つ", "っ") &&
           isKanaSizePlacementEligible("ゆ", "ゅ") &&
-          !isKanaSizePlacementEligible("や", "っ") &&
+          isKanaSizePlacementEligible("や", "っ") &&
           !isKanaSizePlacementEligible("都", "っ"),
         {
           tsu: isKanaSizePlacementEligible("つ", "っ"),
@@ -6291,11 +6412,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         { x: 76, y: 76, t: 40 },
       ]];
       add(
-        "mixed-writing-tsu-resolves-by-educational-placement",
+        "mixed-writing-tsu-resolves-by-placement-even-when-answer-differs",
         resolveKanaSizeByPlacement(
           "つ",
           mixedSmallKanaStrokes,
-          "っ",
+          "ず",
           { width: 100, height: 100 },
         ) === "っ" &&
           resolveKanaSizeByPlacement(
@@ -6304,6 +6425,54 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
             "っ",
             { width: 100, height: 100 },
           ) === "つ",
+      );
+      const pointerMap = (sample) => ({
+        x: Number(sample.clientX),
+        y: Number(sample.clientY),
+        t: Number(sample.timeStamp),
+      });
+      const overlappingPointerBatch = sanitizePointerPointBatch(
+        {
+          clientX: 70,
+          clientY: 70,
+          timeStamp: 70,
+          getCoalescedEvents: () => [
+            { clientX: 20, clientY: 20, timeStamp: 20 },
+            { clientX: 30, clientY: 30, timeStamp: 30 },
+            { clientX: 60, clientY: 60, timeStamp: 60 },
+          ],
+        },
+        pointerMap,
+        { x: 30, y: 30, t: 30 },
+        30,
+      );
+      add(
+        "pointer-samples-drop-stale-overlap-and-preserve-current-endpoint",
+        overlappingPointerBatch.points.length === 2 &&
+          overlappingPointerBatch.points[0].x === 60 &&
+          overlappingPointerBatch.points[1].x === 70 &&
+          overlappingPointerBatch.lastSampleTime === 70,
+        overlappingPointerBatch,
+      );
+      const outOfOrderPointerBatch = sanitizePointerPointBatch(
+        {
+          clientX: 80,
+          clientY: 80,
+          timeStamp: 80,
+          getCoalescedEvents: () => [
+            { clientX: 70, clientY: 70, timeStamp: 70 },
+            { clientX: 50, clientY: 50, timeStamp: 50 },
+            { clientX: 60, clientY: 60, timeStamp: 60 },
+          ],
+        },
+        pointerMap,
+        { x: 40, y: 40, t: 40 },
+        40,
+      );
+      add(
+        "pointer-samples-are-time-sorted-without-retrace",
+        outOfOrderPointerBatch.points.map((point) => point.x).join(",") === "50,60,70,80",
+        outOfOrderPointerBatch,
       );
       state.recognitionResponseKindOverride = "reading";
       add(
@@ -9671,6 +9840,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.pendingStartTime = performance.now();
     state.pendingPointerType = event.pointerType || "";
     state.lastPointerType = state.pendingPointerType;
+    state.lastInputSampleTime = getPointerSampleTime(event);
 
     if (typeof canvas.setPointerCapture === "function") {
       canvas.setPointerCapture(event.pointerId);
@@ -9694,7 +9864,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     updateActionButtons();
 
     addPreparedPoint(state.pendingStartPoint);
-    addPoint(event);
+    appendPointerEventBatch(event);
     state.pendingPointerId = null;
     state.pendingStartPoint = null;
     state.pendingPointerType = "";
@@ -9716,15 +9886,21 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.lastPoint = preparedPoint;
   }
 
-  function addPoint(event) {
+  function appendPointerEventBatch(event) {
     if (!state.activeStrokePoints) {
       return;
     }
-
-    const point = getCanvasPoint(event);
-    state.activeStrokePoints.push(point);
-    drawPoint(point, state.lastPoint);
-    state.lastPoint = point;
+    const previousPoint = state.lastPoint;
+    const prepared = sanitizePointerPointBatch(
+      event,
+      (sample) => getCanvasPoint(sample),
+      previousPoint,
+      state.lastInputSampleTime,
+    );
+    prepared.points.forEach((point) => state.activeStrokePoints.push(point));
+    drawPointBatch(prepared.points, previousPoint);
+    state.lastPoint = prepared.points[prepared.points.length - 1] || previousPoint;
+    state.lastInputSampleTime = prepared.lastSampleTime;
   }
 
   function continueStroke(event) {
@@ -9750,15 +9926,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     event.preventDefault();
 
-    const events =
-      typeof event.getCoalescedEvents === "function"
-        ? event.getCoalescedEvents()
-        : [event];
-    const previousPoint = state.lastPoint;
-    const points = events.map((sample) => getCanvasPoint(sample));
-    points.forEach((point) => state.activeStrokePoints.push(point));
-    drawPointBatch(points, previousPoint);
-    state.lastPoint = points[points.length - 1] || previousPoint;
+    appendPointerEventBatch(event);
   }
 
   function finishStroke(event) {
@@ -9781,6 +9949,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       state.pendingPointerType = "";
       state.activeCanvasTransform = null;
       state.activeLineWidth = 0;
+      state.lastInputSampleTime = 0;
       return;
     }
 
@@ -9789,6 +9958,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
 
     event.preventDefault();
+
+    if (event.type !== "pointercancel") {
+      // 高速運筆では最後の pointermove より先に pointerup が届くため、終点も保存する。
+      appendPointerEventBatch(event);
+    }
 
     if (
       typeof canvas.hasPointerCapture === "function" &&
@@ -9802,6 +9976,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.lastPoint = null;
     state.activeCanvasTransform = null;
     state.activeLineWidth = 0;
+    state.lastInputSampleTime = 0;
     scheduleRecognition(RECOGNITION_FINISH_DELAY_MS);
   }
 
@@ -10059,6 +10234,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.pendingPointerType = "";
     state.activeStrokePoints = null;
     state.lastPoint = null;
+    state.activeCanvasTransform = null;
+    state.activeLineWidth = 0;
+    state.lastInputSampleTime = 0;
   }
 
   function activateCurrentInput({ recognizeIfNeeded = true } = {}) {
@@ -11317,6 +11495,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.lastPoint = null;
     state.trace.activeCanvasTransform = captureCanvasTransform(traceCanvas, isTracePortableRotated());
     state.trace.activeLineWidth = getTraceLineWidth();
+    state.trace.lastInputSampleTime = getPointerSampleTime(event);
     state.trace.strokes.push(state.trace.activeStroke);
     traceCanvas.setPointerCapture?.(event.pointerId);
     addTracePoint(event);
@@ -11341,17 +11520,27 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return;
     }
     event.preventDefault();
-    const samples = typeof event.getCoalescedEvents === "function"
-      ? event.getCoalescedEvents()
-      : [event];
+    appendTracePointerEventBatch(event);
+  }
+
+  function appendTracePointerEventBatch(event) {
+    if (!state.trace.activeStroke) {
+      return;
+    }
     const previousPoint = state.trace.lastPoint;
-    const points = samples.map((sample) => ({
-      ...getTraceCanvasCoordinates(sample),
-      t: Math.round(performance.now() - state.trace.strokeStartTime),
-    }));
-    points.forEach((point) => state.trace.activeStroke.push(point));
-    drawTracePointBatch(points, previousPoint);
-    state.trace.lastPoint = points[points.length - 1] || previousPoint;
+    const prepared = sanitizePointerPointBatch(
+      event,
+      (sample) => ({
+        ...getTraceCanvasCoordinates(sample),
+        t: Math.round(performance.now() - state.trace.strokeStartTime),
+      }),
+      previousPoint,
+      state.trace.lastInputSampleTime,
+    );
+    prepared.points.forEach((point) => state.trace.activeStroke.push(point));
+    drawTracePointBatch(prepared.points, previousPoint);
+    state.trace.lastPoint = prepared.points[prepared.points.length - 1] || previousPoint;
+    state.trace.lastInputSampleTime = prepared.lastSampleTime;
   }
 
   function finishTraceStroke(event) {
@@ -11359,6 +11548,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       return;
     }
     event.preventDefault();
+    if (event.type !== "pointercancel") {
+      appendTracePointerEventBatch(event);
+    }
     if (state.trace.activeStroke && state.trace.activeStroke.length === 1) {
       const first = state.trace.activeStroke[0];
       state.trace.activeStroke.push({ x: first.x + 0.01, y: first.y + 0.01 });
@@ -11368,6 +11560,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.lastPoint = null;
     state.trace.activeCanvasTransform = null;
     state.trace.activeLineWidth = 0;
+    state.trace.lastInputSampleTime = 0;
     drawTraceCanvas();
     scheduleTraceRecognition();
   }
@@ -11388,6 +11581,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
+    state.trace.lastInputSampleTime = 0;
     drawTraceCanvas();
     setTraceRecognition();
   }
@@ -11404,6 +11598,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
+    state.trace.lastInputSampleTime = 0;
     state.trace.recognizedText = "";
     state.trace.recognitionCache = { fingerprint: "", text: "" };
     state.trace.googleFailed = false;
@@ -11442,6 +11637,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
+    state.trace.activeCanvasTransform = null;
+    state.trace.activeLineWidth = 0;
+    state.trace.lastInputSampleTime = 0;
     state.trace.canvasCssSize = { width: 0, height: 0 };
     state.trace.recognizedText = "";
     state.trace.recognitionCache = { fingerprint: "", text: "" };
@@ -11466,6 +11664,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     state.trace.activePointerId = null;
     state.trace.activeStroke = null;
     state.trace.lastPoint = null;
+    state.trace.activeCanvasTransform = null;
+    state.trace.activeLineWidth = 0;
+    state.trace.lastInputSampleTime = 0;
     traceSurface.style.removeProperty("width");
     traceSurface.style.removeProperty("height");
     scheduleLayoutFit();
