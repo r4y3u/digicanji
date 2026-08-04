@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.20.0" />
+    <meta name="application-version" content="1.21.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2143,6 +2143,7 @@ input:focus-visible,
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
 /* v1.20.0: ordered pointer sampling, final-endpoint capture, answer-independent small kana */
+/* v1.21.0: weak-Han external verification and conservative local fallback */
 .result-box,
 .review-menu,
 .result-list {
@@ -3889,6 +3890,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const LOCAL_HAN_OUT_OF_CORPUS_PENALTY = 0.16;
   const LOCAL_HAN_FALLBACK_LIMIT = 24;
   const LOCAL_HAN_FALLBACK_SCORE_LIMIT = 2.95;
+  const HAN_VERIFICATION_GLYPH_PENALTY = 0.82;
+  const HAN_VERIFICATION_GLYPH_SCORE = 0.16;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
   const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
@@ -7753,6 +7756,57 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         }),
       );
       add(
+        "weak-single-han-requests-normalized-verification",
+        shouldVerifyWeakHanCandidate({
+          accepted: [{
+            text: "感",
+            crossEngineConsensus: false,
+            variantCount: 1,
+            glyphShape: { available: true, penalty: 0.9, score: 0.14 },
+          }],
+        }),
+      );
+      add(
+        "cross-variant-han-skips-redundant-verification",
+        !shouldVerifyWeakHanCandidate({
+          accepted: [{
+            text: "感",
+            crossEngineConsensus: false,
+            variantCount: 2,
+            glyphShape: { available: true, penalty: 0.9, score: 0.18 },
+          }],
+        }),
+      );
+      add(
+        "strong-single-han-keeps-fast-path",
+        !shouldVerifyWeakHanCandidate({
+          accepted: [{
+            text: "感",
+            crossEngineConsensus: false,
+            variantCount: 1,
+            glyphShape: { available: true, penalty: 0.4, score: 0.1 },
+          }],
+        }),
+      );
+      add(
+        "project-han-local-fallback-keeps-conservative-penalty",
+        getLocalHanFallbackSourcePenalty({
+          accepted: [{
+            text: "感",
+            glyphShape: { available: true, penalty: 1.2, score: 0.2 },
+          }],
+        }) === LOCAL_HAN_FALLBACK_PENALTY,
+      );
+      add(
+        "out-of-corpus-han-retains-recovery-penalty",
+        getLocalHanFallbackSourcePenalty({
+          accepted: [{
+            text: "𠀀",
+            glyphShape: { available: true, penalty: 1.2, score: 0.2 },
+          }],
+        }) === LOCAL_HAN_OUT_OF_CORPUS_PENALTY,
+      );
+      add(
         "project-han-fallback-universe-covers-wood-and-kan",
         getLocalHanRecognitionUniverseSet().has("木") && getLocalHanRecognitionUniverseSet().has("感"),
       );
@@ -10704,6 +10758,41 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     );
   }
 
+  function shouldVerifyWeakHanCandidate(evaluation) {
+    if (isReadingResponse() || isFreeMode()) {
+      return false;
+    }
+    const top = evaluation?.accepted?.[0];
+    if (
+      !top ||
+      !isCjkIdeograph(top.text) ||
+      top.crossEngineConsensus ||
+      top.variantCount >= 2 ||
+      !top.glyphShape?.available
+    ) {
+      return false;
+    }
+    return (
+      top.glyphShape.penalty >= HAN_VERIFICATION_GLYPH_PENALTY ||
+      top.glyphShape.score >= HAN_VERIFICATION_GLYPH_SCORE
+    );
+  }
+
+  function getLocalHanFallbackSourcePenalty(evaluation) {
+    const top = evaluation?.accepted?.[0];
+    const topIsProjectHan = Boolean(
+      top &&
+      isCjkIdeograph(top.text) &&
+      getLocalHanRecognitionUniverseSet().has(top.text)
+    );
+    // 外部候補が教材内漢字なら、その字形評価が弱くても端末内候補だけで
+    // 大きく上書きしない。正規化した外部照合で裏づけられた候補は、
+    // その外部 membership の得点で自然に順位が上がる。
+    return topIsProjectHan
+      ? LOCAL_HAN_FALLBACK_PENALTY
+      : LOCAL_HAN_OUT_OF_CORPUS_PENALTY;
+  }
+
   function shouldTryLocalKanaFallback(evaluation) {
     if (!isReadingResponse()) {
       return false;
@@ -11310,7 +11399,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         ensembleEvaluation = nativeEvaluation;
 
         const shouldConsultGoogle =
-          !isCandidateEvaluationDecisive(nativeEvaluation);
+          !isCandidateEvaluationDecisive(nativeEvaluation) ||
+          shouldVerifyWeakHanCandidate(nativeEvaluation);
 
         if (shouldConsultGoogle) {
           recognitionPath = nativeCandidates.length > 0
@@ -11328,11 +11418,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         }
 
         const guide = getCanvasGuide();
+        const shouldVerifyHanWithNormalizedGoogle =
+          shouldVerifyWeakHanCandidate(ensembleEvaluation);
         const shouldTryNormalizedGoogle =
           !ensembleEvaluation?.text ||
           (
-            !isCandidateEvaluationDecisive(ensembleEvaluation) &&
-            isNormalizedVariantUseful(state.strokes, guide)
+            (
+              !isCandidateEvaluationDecisive(ensembleEvaluation) ||
+              shouldVerifyHanWithNormalizedGoogle
+            ) &&
+            (
+              isNormalizedVariantUseful(state.strokes, guide) ||
+              shouldVerifyHanWithNormalizedGoogle
+            )
           );
 
         if (shouldTryNormalizedGoogle) {
@@ -11399,20 +11497,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           localHanCandidates = getLocalHanFallbackCandidates(strokeStats);
           if (localHanCandidates.length > 0) {
             recognitionPath += "+local-han-glyph";
-            const preFallbackTop = ensembleEvaluation?.accepted?.[0];
-            const preFallbackInCorpus = Boolean(
-              preFallbackTop && isCjkIdeograph(preFallbackTop.text) && getLocalHanRecognitionUniverseSet().has(preFallbackTop.text)
-            );
-            const preFallbackShapeWeak = Boolean(
-              preFallbackTop?.glyphShape?.available &&
-              (preFallbackTop.glyphShape.penalty >= 0.82 || preFallbackTop.glyphShape.score >= 0.16)
-            );
             sourceGroups.push({
               source: "local-han",
               variant: "educational-corpus-glyph",
-              penalty: (!preFallbackInCorpus || preFallbackShapeWeak)
-                ? LOCAL_HAN_OUT_OF_CORPUS_PENALTY
-                : LOCAL_HAN_FALLBACK_PENALTY,
+              penalty: getLocalHanFallbackSourcePenalty(ensembleEvaluation),
               candidates: localHanCandidates,
             });
             ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
