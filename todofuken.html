@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.21.0" />
+    <meta name="application-version" content="1.22.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2143,7 +2143,7 @@ input:focus-visible,
 /* v1.15.0: kana-size consistency, topology-aware recognition and input-latency reduction */
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
 /* v1.20.0: ordered pointer sampling, final-endpoint capture, answer-independent small kana */
-/* v1.21.0: weak-Han external verification and conservative local fallback */
+/* v1.22.0: single-source Han verification and variant-stability ranking */
 .result-box,
 .review-menu,
 .result-list {
@@ -3887,11 +3887,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const SMALL_KANA_AMBIGUOUS_PENALTY = 0.56;
   const SMALL_KANA_DEFAULT_PENALTY = 1.02;
   const LOCAL_HAN_FALLBACK_PENALTY = 0.46;
+  const LOCAL_HAN_DISAGREEMENT_PENALTY = 0.34;
   const LOCAL_HAN_OUT_OF_CORPUS_PENALTY = 0.16;
   const LOCAL_HAN_FALLBACK_LIMIT = 24;
   const LOCAL_HAN_FALLBACK_SCORE_LIMIT = 2.95;
-  const HAN_VERIFICATION_GLYPH_PENALTY = 0.82;
-  const HAN_VERIFICATION_GLYPH_SCORE = 0.16;
+  const HAN_VERIFICATION_GLYPH_PENALTY = 0.68;
+  const HAN_VERIFICATION_GLYPH_SCORE = 0.15;
+  const HAN_VERIFICATION_AMBIGUITY_MARGIN = 1.3;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
   const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
@@ -3899,6 +3901,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const RECOGNITION_SOURCE_RANK_WEIGHT = 0.18;
   const RECOGNITION_CROSS_ENGINE_BONUS = 1.35;
   const RECOGNITION_MULTI_VARIANT_BONUS = 0.18;
+  const RECOGNITION_VARIANT_AVERAGE_RANK_PENALTY = 0.05;
+  const RECOGNITION_VARIANT_RANK_SPREAD_PENALTY = 0.04;
   const RECOGNITION_NORMALIZED_VARIANT_PENALTY = 0.28;
   const RECOGNITION_REPAIR_SPLIT_PENALTY = 0.68;
   const RECOGNITION_REPAIR_MERGE_PENALTY = 0.72;
@@ -7789,6 +7793,93 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         }),
       );
       add(
+        "close-runner-up-single-han-requests-verification",
+        shouldVerifyWeakHanCandidate({
+          accepted: [
+            {
+              text: "社",
+              crossEngineConsensus: false,
+              variantCount: 1,
+              glyphShape: { available: true, penalty: 0.4, score: 0.1 },
+            },
+            {
+              text: "兵",
+              crossEngineConsensus: false,
+              variantCount: 1,
+              glyphShape: { available: true, penalty: 0.5, score: 0.11 },
+            },
+          ],
+          margin: 1.1,
+        }),
+      );
+      const variantDisagreementEvaluation = {
+        accepted: [{ text: "社" }, { text: "兵" }],
+        sourceGroups: [
+          { source: "google", variant: "raw", candidates: ["社", "兵"] },
+          { source: "google", variant: "normalized", candidates: ["兵", "社"] },
+        ],
+      };
+      add(
+        "google-han-variant-leader-disagreement-is-detected",
+        hasGoogleHanVariantDisagreement(variantDisagreementEvaluation),
+        variantDisagreementEvaluation,
+      );
+      add(
+        "stable-google-han-variant-leader-is-not-disagreement",
+        !hasGoogleHanVariantDisagreement({
+          accepted: [{ text: "兵" }, { text: "社" }],
+          sourceGroups: [
+            { source: "google", variant: "raw", candidates: ["兵", "社"] },
+            { source: "google", variant: "normalized", candidates: ["兵", "社"] },
+          ],
+        }),
+      );
+      const decisiveVariantDisagreement = {
+        accepted: [
+          {
+            text: "社",
+            score: 0.2,
+            glyphShape: { available: true, penalty: 0.1, score: 0.08 },
+          },
+          {
+            text: "兵",
+            score: 2.2,
+            glyphShape: { available: true, penalty: 0.2, score: 0.09 },
+          },
+        ],
+        margin: 2,
+        sourceGroups: variantDisagreementEvaluation.sourceGroups,
+      };
+      add(
+        "decisive-google-variant-disagreement-runs-local-tiebreaker",
+        shouldTryLocalHanFallback(decisiveVariantDisagreement),
+        decisiveVariantDisagreement,
+      );
+      add(
+        "decisive-stable-project-han-skips-local-tiebreaker",
+        !shouldTryLocalHanFallback({
+          accepted: decisiveVariantDisagreement.accepted,
+          margin: 2,
+          sourceGroups: [
+            { source: "google", variant: "raw", candidates: ["社", "兵"] },
+            { source: "google", variant: "normalized", candidates: ["社", "兵"] },
+          ],
+        }),
+      );
+      const stableVariantRanks = getSameEngineVariantRankInstability([
+        { source: "google", variant: "raw", rank: 0 },
+        { source: "google", variant: "normalized", rank: 0 },
+      ]);
+      const unstableVariantRanks = getSameEngineVariantRankInstability([
+        { source: "google", variant: "raw", rank: 0 },
+        { source: "google", variant: "normalized", rank: 4 },
+      ]);
+      add(
+        "variant-rank-instability-penalizes-rank-swings",
+        stableVariantRanks.penalty === 0 && unstableVariantRanks.penalty > 0,
+        { stableVariantRanks, unstableVariantRanks },
+      );
+      add(
         "project-han-local-fallback-keeps-conservative-penalty",
         getLocalHanFallbackSourcePenalty({
           accepted: [{
@@ -7796,6 +7887,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
             glyphShape: { available: true, penalty: 1.2, score: 0.2 },
           }],
         }) === LOCAL_HAN_FALLBACK_PENALTY,
+      );
+      add(
+        "variant-disagreement-uses-bounded-local-tiebreaker",
+        getLocalHanFallbackSourcePenalty(variantDisagreementEvaluation) ===
+          LOCAL_HAN_DISAGREEMENT_PENALTY,
       );
       add(
         "out-of-corpus-han-retains-recovery-penalty",
@@ -10745,6 +10841,79 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return scored.slice(0, LOCAL_HAN_FALLBACK_LIMIT).map((item) => item.char);
   }
 
+  function getAcceptedSourceGroupLeader(evaluation, source, variant) {
+    const group = evaluation?.sourceGroups?.find((item) =>
+      item.source === source && item.variant === variant
+    );
+    if (!group) {
+      return "";
+    }
+    const accepted = new Set(
+      (evaluation?.accepted || []).map((item) => normalizeComparableText(item.text)),
+    );
+    return group.candidates.find((candidate) =>
+      accepted.has(normalizeComparableText(candidate))
+    ) || "";
+  }
+
+  function hasGoogleHanVariantDisagreement(evaluation) {
+    if (isReadingResponse() || isFreeMode()) {
+      return false;
+    }
+    const rawLeader = getAcceptedSourceGroupLeader(evaluation, "google", "raw");
+    const normalizedLeader = getAcceptedSourceGroupLeader(evaluation, "google", "normalized");
+    return Boolean(
+      rawLeader &&
+      normalizedLeader &&
+      isCjkIdeograph(rawLeader) &&
+      isCjkIdeograph(normalizedLeader) &&
+      normalizeComparableText(rawLeader) !== normalizeComparableText(normalizedLeader)
+    );
+  }
+
+  function getSameEngineVariantRankInstability(memberships) {
+    const bySource = new Map();
+    (Array.isArray(memberships) ? memberships : []).forEach((membership) => {
+      if (
+        membership.source === "local-han" ||
+        membership.source === "local-kana" ||
+        String(membership.variant || "").startsWith("repair-")
+      ) {
+        return;
+      }
+      if (!bySource.has(membership.source)) {
+        bySource.set(membership.source, new Map());
+      }
+      const variants = bySource.get(membership.source);
+      const rank = Number.isFinite(membership.rank) ? membership.rank : 0;
+      variants.set(
+        membership.variant,
+        Math.min(variants.get(membership.variant) ?? Infinity, rank),
+      );
+    });
+
+    let penalty = 0;
+    const details = [];
+    bySource.forEach((variants, source) => {
+      const ranks = Array.from(variants.values());
+      if (ranks.length < 2) {
+        return;
+      }
+      const averageRank = ranks.reduce((sum, rank) => sum + rank, 0) / ranks.length;
+      const rankSpread = Math.max(...ranks) - Math.min(...ranks);
+      const sourcePenalty =
+        averageRank * RECOGNITION_VARIANT_AVERAGE_RANK_PENALTY +
+        rankSpread * RECOGNITION_VARIANT_RANK_SPREAD_PENALTY;
+      penalty += sourcePenalty;
+      details.push({ source, ranks, averageRank, rankSpread, penalty: sourcePenalty });
+    });
+
+    return {
+      penalty: Math.round(Math.min(0.72, penalty) * 1000) / 1000,
+      details,
+    };
+  }
+
   function shouldTryLocalHanFallback(evaluation) {
     if (isReadingResponse() || isFreeMode()) return false;
     const top = evaluation?.accepted?.[0];
@@ -10754,7 +10923,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       !isCandidateEvaluationDecisive(evaluation) ||
       !isCjkIdeograph(top.text) ||
       !topIsProjectHan ||
-      (top.glyphShape?.available && top.glyphShape.penalty >= 0.54)
+      (top.glyphShape?.available && top.glyphShape.penalty >= 0.54) ||
+      hasGoogleHanVariantDisagreement(evaluation)
     );
   }
 
@@ -10774,7 +10944,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
     return (
       top.glyphShape.penalty >= HAN_VERIFICATION_GLYPH_PENALTY ||
-      top.glyphShape.score >= HAN_VERIFICATION_GLYPH_SCORE
+      top.glyphShape.score >= HAN_VERIFICATION_GLYPH_SCORE ||
+      (
+        evaluation.accepted.length >= 2 &&
+        Number.isFinite(evaluation.margin) &&
+        evaluation.margin <= HAN_VERIFICATION_AMBIGUITY_MARGIN
+      )
     );
   }
 
@@ -10789,7 +10964,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     // 大きく上書きしない。正規化した外部照合で裏づけられた候補は、
     // その外部 membership の得点で自然に順位が上がる。
     return topIsProjectHan
-      ? LOCAL_HAN_FALLBACK_PENALTY
+      ? hasGoogleHanVariantDisagreement(evaluation)
+        ? LOCAL_HAN_DISAGREEMENT_PENALTY
+        : LOCAL_HAN_FALLBACK_PENALTY
       : LOCAL_HAN_OUT_OF_CORPUS_PENALTY;
   }
 
@@ -10972,6 +11149,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         : variants.size >= 2
           ? RECOGNITION_MULTI_VARIANT_BONUS
           : 0;
+      // 同じ認識器の未正規化・正規化入力で候補順位が大きく揺れる場合は、
+      // 「両方に含まれた」事実だけで同意扱いにしない。順位平均と順位差を
+      // 小さな不安定度として加え、両入力で上位が安定した候補を優先する。
+      const variantRankInstability = getSameEngineVariantRankInstability(scoringMemberships);
 
       if (
         compatibility.unknownStrokeCount &&
@@ -10988,7 +11169,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           compatibility.scorePenalty +
           spatial.penalty +
           sourceRankPenalty -
-          consensusBonus
+          consensusBonus +
+          variantRankInstability.penalty
         : Number.POSITIVE_INFINITY;
       const repairMemberships = scoringMemberships.filter((item) =>
         String(item.variant || "").startsWith("repair-")
@@ -11014,6 +11196,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         effectiveStrokeStats,
         crossEngineConsensus,
         variantCount: variants.size,
+        variantRankInstability,
         repairSupported: repairMemberships.length > 0,
         repairRequired: repairMemberships.length > 0 && nonRepairMemberships.length === 0,
         selectedVariant: selectedMembershipCompatibility?.membership?.variant || "",
