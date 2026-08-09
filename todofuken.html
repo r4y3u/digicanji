@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.22.0" />
+    <meta name="application-version" content="1.23.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2144,6 +2144,7 @@ input:focus-visible,
 /* v1.16.0: quarter-based small-kana placement and slimmer handwriting ink */
 /* v1.20.0: ordered pointer sampling, final-endpoint capture, answer-independent small kana */
 /* v1.22.0: single-source Han verification and variant-stability ranking */
+/* v1.23.0: weak-consensus confirmation, stale-recognition cancellation and bounded stroke storage */
 .result-box,
 .review-menu,
 .result-list {
@@ -3894,6 +3895,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const HAN_VERIFICATION_GLYPH_PENALTY = 0.68;
   const HAN_VERIFICATION_GLYPH_SCORE = 0.15;
   const HAN_VERIFICATION_AMBIGUITY_MARGIN = 1.3;
+  const HAN_CONSENSUS_CONFIRM_GLYPH_PENALTY = 1.12;
+  const HAN_CONSENSUS_CONFIRM_GLYPH_SCORE = 0.2;
+  const HAN_CONSENSUS_CONFIRM_MARGIN = 1.35;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
   const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
@@ -3901,9 +3905,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const RECOGNITION_SOURCE_RANK_WEIGHT = 0.18;
   const RECOGNITION_CROSS_ENGINE_BONUS = 1.35;
   const RECOGNITION_MULTI_VARIANT_BONUS = 0.18;
+  const RECOGNITION_ADDITIONAL_VARIANT_BONUS = 0.12;
   const RECOGNITION_VARIANT_AVERAGE_RANK_PENALTY = 0.05;
   const RECOGNITION_VARIANT_RANK_SPREAD_PENALTY = 0.04;
   const RECOGNITION_NORMALIZED_VARIANT_PENALTY = 0.28;
+  const RECOGNITION_CONFIRMATION_VARIANT_PENALTY = 0.34;
   const RECOGNITION_REPAIR_SPLIT_PENALTY = 0.68;
   const RECOGNITION_REPAIR_MERGE_PENALTY = 0.72;
   const RECOGNITION_REPAIR_TAP_PENALTY = 0.96;
@@ -3923,6 +3929,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const GLYPH_SHAPE_MIN_INK_COVERAGE = 0.70;
   const GLYPH_SHAPE_MIN_GLYPH_COVERAGE = 0.58;
   const GOOGLE_NORMALIZATION_PADDING_RATIO = 0.08;
+  const GOOGLE_CONFIRMATION_PADDING_RATIO = 0.15;
+  const SESSION_GLYPH_CACHE_RETAINED = 128;
   const EDUCATIONAL_FONT_CANDIDATES = Object.freeze([
     "UD Digi Kyokasho N-R",
     "UD Digi Kyokasho NK-R",
@@ -5494,6 +5502,18 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return sampled;
   }
 
+  function compactFinalizedStroke(stroke) {
+    if (!Array.isArray(stroke) || stroke.length <= 2) {
+      return stroke;
+    }
+    const compacted = compressStrokeForRecognition(stroke);
+    if (compacted === stroke) {
+      return stroke;
+    }
+    stroke.splice(0, stroke.length, ...compacted);
+    return stroke;
+  }
+
   let preferredGoogleTransport = null;
 
   function getGoogleTransports() {
@@ -5516,6 +5536,23 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function cancelGoogleRecognition(scope = state) {
     scope.googleAbortController?.abort?.();
     scope.googleAbortController = null;
+  }
+
+  function resetRecognitionCache() {
+    state.recognitionCache = { fingerprint: "", text: "" };
+    state.lastCandidateEvaluation = null;
+  }
+
+  function isRecognitionRunCurrent(serial) {
+    return (
+      serial === state.recognitionSerial &&
+      !isPointerInputActive() &&
+      hasMeaningfulInk()
+    );
+  }
+
+  function yieldToPendingInput() {
+    return new Promise((resolve) => window.setTimeout(resolve, 0));
   }
 
   async function queryNativeSupport(constraint) {
@@ -6146,6 +6183,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const glyphShapeModelCache = new Map();
   let glyphInkShapeCache = { fingerprint: "", model: null };
   let glyphInkShapeVariantCache = { fingerprint: "", variants: [] };
+
+  function trimGlyphShapeModelCache(maxEntries = GLYPH_SHAPE_CACHE_LIMIT) {
+    const limit = Math.max(0, Math.floor(Number(maxEntries) || 0));
+    while (glyphShapeModelCache.size > limit) {
+      const oldest = glyphShapeModelCache.keys().next().value;
+      glyphShapeModelCache.delete(oldest);
+    }
+    glyphInkShapeCache = { fingerprint: "", model: null };
+    glyphInkShapeVariantCache = { fingerprint: "", variants: [] };
+  }
 
   function getMaskBounds(mask, width, height) {
     let left = width;
@@ -7123,6 +7170,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     nativeCandidates,
     googleRawCandidates,
     googleNormalizedCandidates,
+    googleConfirmationCandidates,
     localKanaCandidates,
     localHanCandidates,
     repairCandidateGroups,
@@ -7170,6 +7218,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         native: nativeCandidates,
         googleRaw: googleRawCandidates,
         googleNormalized: googleNormalizedCandidates,
+        googleConfirmation: googleConfirmationCandidates || [],
         localKana: localKanaCandidates || [],
         localHan: localHanCandidates || [],
         repairs: (repairCandidateGroups || []).map((group) => ({
@@ -7878,6 +7927,85 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         "variant-rank-instability-penalizes-rank-swings",
         stableVariantRanks.penalty === 0 && unstableVariantRanks.penalty > 0,
         { stableVariantRanks, unstableVariantRanks },
+      );
+      add(
+        "weak-cross-variant-han-consensus-requests-one-more-check",
+        shouldConfirmWeakHanVariantConsensus({
+          accepted: [
+            {
+              text: "新",
+              crossEngineConsensus: false,
+              variantCount: 2,
+              independentVariantCount: 2,
+              glyphShape: { available: true, penalty: 1.4, score: 0.23 },
+            },
+            {
+              text: "愛",
+              crossEngineConsensus: false,
+              variantCount: 2,
+              independentVariantCount: 2,
+              glyphShape: { available: true, penalty: 1.5, score: 0.24 },
+            },
+          ],
+          margin: 0.42,
+        }),
+      );
+      add(
+        "strong-cross-variant-han-consensus-keeps-two-check-fast-path",
+        !shouldConfirmWeakHanVariantConsensus({
+          accepted: [
+            {
+              text: "県",
+              crossEngineConsensus: false,
+              variantCount: 2,
+              independentVariantCount: 2,
+              glyphShape: { available: true, penalty: 0.5, score: 0.12 },
+            },
+            {
+              text: "香",
+              crossEngineConsensus: false,
+              variantCount: 1,
+              independentVariantCount: 1,
+              glyphShape: { available: true, penalty: 0.7, score: 0.16 },
+            },
+          ],
+          margin: 0.9,
+        }),
+      );
+      const twoVariantMemberships = [
+        { source: "google", variant: "raw", rank: 0 },
+        { source: "google", variant: "normalized", rank: 1 },
+      ];
+      const threeVariantMemberships = [
+        ...twoVariantMemberships,
+        { source: "google", variant: "normalized-confirmation", rank: 0 },
+      ];
+      add(
+        "third-independent-variant-adds-only-bounded-consensus-support",
+        getIndependentRecognitionVariantCount(threeVariantMemberships) === 3 &&
+          Math.abs(
+            getRecognitionConsensusBonus(threeVariantMemberships) -
+            getRecognitionConsensusBonus(twoVariantMemberships) -
+            RECOGNITION_ADDITIONAL_VARIANT_BONUS
+          ) < 0.0001,
+        {
+          two: getRecognitionConsensusBonus(twoVariantMemberships),
+          three: getRecognitionConsensusBonus(threeVariantMemberships),
+        },
+      );
+      const denseFinalizedStroke = Array.from({ length: 420 }, (_, index) => ({
+        x: index * 0.7,
+        y: 40 + Math.sin(index / 18) * 8,
+        t: index * 2,
+      }));
+      const denseEndpoint = denseFinalizedStroke.at(-1);
+      compactFinalizedStroke(denseFinalizedStroke);
+      add(
+        "finalized-stroke-storage-is-bounded-and-keeps-endpoint",
+        denseFinalizedStroke.length <= RECOGNITION_MAX_POINTS_PER_STROKE &&
+          denseFinalizedStroke.at(-1)?.x === denseEndpoint.x &&
+          denseFinalizedStroke.at(-1)?.y === denseEndpoint.y,
+        { length: denseFinalizedStroke.length, endpoint: denseFinalizedStroke.at(-1) },
       );
       add(
         "project-han-local-fallback-keeps-conservative-penalty",
@@ -10914,6 +11042,44 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     };
   }
 
+  function getIndependentRecognitionVariantCount(memberships) {
+    const variants = new Set();
+    (Array.isArray(memberships) ? memberships : []).forEach((membership) => {
+      const source = String(membership?.source || "");
+      const variant = String(membership?.variant || "");
+      if (
+        !source ||
+        source === "local-han" ||
+        source === "local-kana" ||
+        variant.startsWith("repair-") ||
+        variant.endsWith("-kana-size") ||
+        membership?.alternativeOf
+      ) {
+        return;
+      }
+      variants.add(`${source}:${variant}`);
+    });
+    return variants.size;
+  }
+
+  function getRecognitionConsensusBonus(memberships, crossEngineConsensus = false) {
+    if (crossEngineConsensus) {
+      return RECOGNITION_CROSS_ENGINE_BONUS;
+    }
+    const legacyVariantCount = new Set(
+      (Array.isArray(memberships) ? memberships : []).map((membership) =>
+        `${membership?.source || ""}:${membership?.variant || ""}`
+      ),
+    ).size;
+    if (legacyVariantCount < 2) {
+      return 0;
+    }
+    const independentVariantCount = getIndependentRecognitionVariantCount(memberships);
+    return RECOGNITION_MULTI_VARIANT_BONUS +
+      Math.min(2, Math.max(0, independentVariantCount - 2)) *
+        RECOGNITION_ADDITIONAL_VARIANT_BONUS;
+  }
+
   function shouldTryLocalHanFallback(evaluation) {
     if (isReadingResponse() || isFreeMode()) return false;
     const top = evaluation?.accepted?.[0];
@@ -10949,6 +11115,27 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         evaluation.accepted.length >= 2 &&
         Number.isFinite(evaluation.margin) &&
         evaluation.margin <= HAN_VERIFICATION_AMBIGUITY_MARGIN
+      )
+    );
+  }
+
+  function shouldConfirmWeakHanVariantConsensus(evaluation) {
+    if (isReadingResponse() || isFreeMode()) {
+      return false;
+    }
+    const top = evaluation?.accepted?.[0];
+    return Boolean(
+      top &&
+      isCjkIdeograph(top.text) &&
+      !top.crossEngineConsensus &&
+      top.independentVariantCount >= 2 &&
+      top.glyphShape?.available &&
+      evaluation.accepted.length >= 2 &&
+      Number.isFinite(evaluation.margin) &&
+      evaluation.margin <= HAN_CONSENSUS_CONFIRM_MARGIN &&
+      (
+        top.glyphShape.penalty >= HAN_CONSENSUS_CONFIRM_GLYPH_PENALTY ||
+        top.glyphShape.score >= HAN_CONSENSUS_CONFIRM_GLYPH_SCORE
       )
     );
   }
@@ -11138,17 +11325,17 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const engines = new Set(scoringMemberships.map((item) => item.source));
       const variants = new Set(scoringMemberships.map((item) => `${item.source}:${item.variant}`));
       const crossEngineConsensus = engines.has("native") && engines.has("google");
+      const independentVariantCount = getIndependentRecognitionVariantCount(scoringMemberships);
       const bestSourceRank = Math.min(...scoringMemberships.map((item) => item.rank));
       const sourceRankPenalty = Math.min(
         ...scoringMemberships.map((item) =>
           item.rank * RECOGNITION_SOURCE_RANK_WEIGHT + item.penalty
         ),
       );
-      const consensusBonus = crossEngineConsensus
-        ? RECOGNITION_CROSS_ENGINE_BONUS
-        : variants.size >= 2
-          ? RECOGNITION_MULTI_VARIANT_BONUS
-          : 0;
+      const consensusBonus = getRecognitionConsensusBonus(
+        scoringMemberships,
+        crossEngineConsensus,
+      );
       // 同じ認識器の未正規化・正規化入力で候補順位が大きく揺れる場合は、
       // 「両方に含まれた」事実だけで同意扱いにしない。順位平均と順位差を
       // 小さな不安定度として加え、両入力で上位が安定した候補を優先する。
@@ -11196,6 +11383,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         effectiveStrokeStats,
         crossEngineConsensus,
         variantCount: variants.size,
+        independentVariantCount,
         variantRankInstability,
         repairSupported: repairMemberships.length > 0,
         repairRequired: repairMemberships.length > 0 && nonRepairMemberships.length === 0,
@@ -11366,6 +11554,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   function prepareStroke(event) {
     window.clearTimeout(state.recognitionTimer);
     cancelGoogleRecognition(state);
+    resetRecognitionCache();
     resetCandidateStability();
     state.pendingPointerId = event.pointerId;
     state.activeCanvasTransform = captureCanvasTransform(
@@ -11487,6 +11676,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       state.activeCanvasTransform = null;
       state.activeLineWidth = 0;
       state.lastInputSampleTime = 0;
+      if (hasMeaningfulInk() && !getActiveInputRecord().text) {
+        scheduleRecognition(RECOGNITION_FINISH_DELAY_MS);
+      } else {
+        setBusy(false);
+      }
       return;
     }
 
@@ -11500,6 +11694,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       // 高速運筆では最後の pointermove より先に pointerup が届くため、終点も保存する。
       appendPointerEventBatch(event);
     }
+
+    compactFinalizedStroke(state.activeStrokePoints);
 
     if (
       typeof canvas.hasPointerCapture === "function" &&
@@ -11553,11 +11749,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     try {
       state.nextRecognitionDelay = RECOGNITION_RETRY_DELAY_MS;
       const strokeStats = estimateInputStrokeStats();
-      const fingerprint = `${isFreeMode() ? "free" : "character"}:${getStrokesFingerprint(state.strokes)}`;
+      const recognitionStrokes = cloneRecognitionStrokes(state.strokes);
+      const fingerprint = `${isFreeMode() ? "free" : "character"}:${getStrokesFingerprint(recognitionStrokes)}`;
       let text = "";
       let nativeCandidates = [];
       let googleRawCandidates = [];
       let googleNormalizedCandidates = [];
+      let googleConfirmationCandidates = [];
       let localKanaCandidates = [];
       let localHanCandidates = [];
       let repairCandidateGroups = [];
@@ -11571,6 +11769,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       } else {
         recognitionPath = "native";
         nativeCandidates = await recognizeWithNative();
+        await yieldToPendingInput();
+        if (!isRecognitionRunCurrent(serial)) {
+          return;
+        }
         if (nativeCandidates.length > 0) {
           sourceGroups.push({
             source: "native",
@@ -11589,7 +11791,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           recognitionPath = nativeCandidates.length > 0
             ? "native+google-raw"
             : "google-raw";
-          googleRawCandidates = await recognizeWithGoogle(state.strokes);
+          googleRawCandidates = await recognizeWithGoogle(recognitionStrokes);
+          await yieldToPendingInput();
+          if (!isRecognitionRunCurrent(serial)) {
+            return;
+          }
           if (googleRawCandidates.length > 0) {
             sourceGroups.push({
               source: "google",
@@ -11611,15 +11817,19 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
               shouldVerifyHanWithNormalizedGoogle
             ) &&
             (
-              isNormalizedVariantUseful(state.strokes, guide) ||
+              isNormalizedVariantUseful(recognitionStrokes, guide) ||
               shouldVerifyHanWithNormalizedGoogle
             )
           );
 
         if (shouldTryNormalizedGoogle) {
           recognitionPath += "+google-normalized";
-          const normalizedStrokes = normalizeStrokesToGuide(state.strokes, guide);
+          const normalizedStrokes = normalizeStrokesToGuide(recognitionStrokes, guide);
           googleNormalizedCandidates = await recognizeWithGoogle(normalizedStrokes);
+          await yieldToPendingInput();
+          if (!isRecognitionRunCurrent(serial)) {
+            return;
+          }
           if (googleNormalizedCandidates.length > 0) {
             sourceGroups.push({
               source: "google",
@@ -11631,18 +11841,45 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
         }
 
+        if (shouldConfirmWeakHanVariantConsensus(ensembleEvaluation)) {
+          recognitionPath += "+google-confirmation";
+          const confirmationStrokes = normalizeStrokesToGuide(
+            recognitionStrokes,
+            guide,
+            GOOGLE_CONFIRMATION_PADDING_RATIO,
+          );
+          googleConfirmationCandidates = await recognizeWithGoogle(confirmationStrokes);
+          await yieldToPendingInput();
+          if (!isRecognitionRunCurrent(serial)) {
+            return;
+          }
+          if (googleConfirmationCandidates.length > 0) {
+            sourceGroups.push({
+              source: "google",
+              variant: "normalized-confirmation",
+              penalty: RECOGNITION_CONFIRMATION_VARIANT_PENALTY,
+              candidates: googleConfirmationCandidates,
+            });
+            ensembleEvaluation = evaluateCandidateEnsemble(sourceGroups, strokeStats);
+          }
+        }
+
         const shouldTryRepairVariants =
           !ensembleEvaluation?.text ||
           !isCandidateEvaluationDecisive(ensembleEvaluation);
         if (shouldTryRepairVariants) {
           const repairVariants = createRecognitionRepairVariants(
-            state.strokes,
+            recognitionStrokes,
             guide,
             { freeMode: isFreeMode() },
           );
           for (const repair of repairVariants) {
             recognitionPath += `+${repair.variant}`;
             const candidates = await recognizeWithGoogle(repair.strokes);
+            await yieldToPendingInput();
+            if (!isRecognitionRunCurrent(serial)) {
+              return;
+            }
             const repairGroup = {
               source: "google",
               variant: repair.variant,
@@ -11660,6 +11897,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
               break;
             }
           }
+        }
+
+        await yieldToPendingInput();
+        if (!isRecognitionRunCurrent(serial)) {
+          return;
         }
 
         if (shouldTryLocalKanaFallback(ensembleEvaluation)) {
@@ -11716,6 +11958,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         nativeCandidates,
         googleRawCandidates,
         googleNormalizedCandidates,
+        googleConfirmationCandidates,
         localKanaCandidates,
         localHanCandidates,
         repairCandidateGroups,
@@ -11779,6 +12022,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     window.clearTimeout(state.recognitionTimer);
     cancelGoogleRecognition(state);
     state.recognitionSerial += 1;
+    resetRecognitionCache();
     resetPointerState();
     resetNativeDrawing();
     resetCandidateStability();
@@ -11819,6 +12063,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     window.clearTimeout(state.recognitionTimer);
     cancelGoogleRecognition(state);
     state.recognitionSerial += 1;
+    resetRecognitionCache();
     resetPointerState();
     resetNativeDrawing();
     resetCandidateStability();
@@ -11840,6 +12085,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     window.clearTimeout(state.recognitionTimer);
     cancelGoogleRecognition(state);
     state.recognitionSerial += 1;
+    resetRecognitionCache();
     resetPointerState();
     resetNativeDrawing();
     resetCandidateStability();
@@ -12202,6 +12448,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function startSession() {
     clearResultTimers();
+    trimGlyphShapeModelCache(SESSION_GLYPH_CACHE_RETAINED);
     if (state.questions.length === 0) {
       questionText.textContent = "問題データが同梱されていません。";
       return;
