@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.23.0" />
+    <meta name="application-version" content="1.24.1" />
     <style>
 :root {
   color-scheme: dark;
@@ -2145,6 +2145,7 @@ input:focus-visible,
 /* v1.20.0: ordered pointer sampling, final-endpoint capture, answer-independent small kana */
 /* v1.22.0: single-source Han verification and variant-stability ranking */
 /* v1.23.0: weak-consensus confirmation, stale-recognition cancellation and bounded stroke storage */
+/* v1.24.1: distinguish Saka's crossed Mata component from the Yaku glyph */
 .result-box,
 .review-menu,
 .result-list {
@@ -3846,6 +3847,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   });
   const SUPPLEMENTAL_STROKE_COUNTS = Object.freeze({
     "鱸": 27,
+    "阨": 7,
   });
 
   // 活字輪郭から得た画数ではなく、学校で扱う標準的な手書きの筆の上げ下げを使う。
@@ -3898,6 +3900,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const HAN_CONSENSUS_CONFIRM_GLYPH_PENALTY = 1.12;
   const HAN_CONSENSUS_CONFIRM_GLYPH_SCORE = 0.2;
   const HAN_CONSENSUS_CONFIRM_MARGIN = 1.35;
+  const RECOGNITION_CONFIRMATION_ENDPOINT_TRIM_RATIO = 0.045;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
   const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
@@ -3908,6 +3911,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const RECOGNITION_ADDITIONAL_VARIANT_BONUS = 0.12;
   const RECOGNITION_VARIANT_AVERAGE_RANK_PENALTY = 0.05;
   const RECOGNITION_VARIANT_RANK_SPREAD_PENALTY = 0.04;
+  const RECOGNITION_ROBUST_RANK_FUSION_SCALE = 0.75;
+  const RECOGNITION_ROBUST_RANK_FUSION_LIMIT = 0.32;
   const RECOGNITION_NORMALIZED_VARIANT_PENALTY = 0.28;
   const RECOGNITION_CONFIRMATION_VARIANT_PENALTY = 0.34;
   const RECOGNITION_REPAIR_SPLIT_PENALTY = 0.68;
@@ -3928,6 +3933,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const GLYPH_SHAPE_WEAK_SCORE = 0.115;
   const GLYPH_SHAPE_MIN_INK_COVERAGE = 0.70;
   const GLYPH_SHAPE_MIN_GLYPH_COVERAGE = 0.58;
+  const STRONG_COMPONENT_GLYPH_PENALTY_LIMIT = 1.72;
   const GOOGLE_NORMALIZATION_PADDING_RATIO = 0.08;
   const GOOGLE_CONFIRMATION_PADDING_RATIO = 0.15;
   const SESSION_GLYPH_CACHE_RETAINED = 128;
@@ -3966,6 +3972,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     "廣": "広",
     "氣": "気",
     "澤": "沢",
+    // 日本語学習では簡体字をそのまま正答候補にしない。日本の標準字体へ
+    // 戻したうえで、画数・部品構造を通常どおり検査する。
+    "饭": "飯",
     "邊": "辺",
     "邉": "辺",
     "齊": "斉",
@@ -4012,6 +4021,30 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       source: "天",
       target: "夭",
       test: hasLikelyYouStructure,
+    },
+    {
+      source: "岐",
+      target: "阪",
+      test: hasLikelyKozatohenPrefix,
+      penalty: 0.08,
+    },
+    {
+      source: "坂",
+      target: "阪",
+      test: hasLikelyKozatohenPrefix,
+      penalty: 0.08,
+    },
+    {
+      source: "飯",
+      target: "阪",
+      test: hasLikelyKozatohenPrefix,
+      penalty: 0.08,
+    },
+    {
+      source: "阨",
+      target: "阪",
+      test: hasLikelySakaAgainstYakuStructure,
+      penalty: 0.06,
     },
   ]);
 
@@ -4085,6 +4118,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const BUN_COMPONENT_SUFFIX_CHARS = new Set(Array.from("紋蚊雯"));
   const ENNYOU_COMPONENT_CHARS = new Set(Array.from("建健廷庭延誕"));
   const SEN_COMPONENT_SUFFIX_CHARS = new Set(Array.from("残浅桟銭践賎"));
+  const KOZATOHEN_COMPETING_PREFIX_CHARS = new Set(Array.from("岐坂飯"));
+  const YAKU_COMPONENT_COMPETING_CHARS = new Set(Array.from("阨"));
 
   // 運筆方向の規則は文字ごとの分岐ではなく、同じ点画骨格を共有する部品族へ登録する。
   // 各規則は「部品の筆画範囲」と「その中の払いの方向」だけを宣言し、共通評価器を使う。
@@ -4174,6 +4209,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       id: "ennyou-not-shinnyou",
       applies: (text) => ENNYOU_COMPONENT_CHARS.has(text),
       test: evaluateEnnyouAgainstShinnyou,
+    },
+    {
+      id: "kozatohen-not-mountain-earth-food",
+      applies: (text) => KOZATOHEN_COMPETING_PREFIX_CHARS.has(text),
+      test: evaluateCompetingPrefixAgainstKozatohen,
+    },
+    {
+      id: "yaku-not-saka-crossed-mata",
+      applies: (text) => YAKU_COMPONENT_COMPETING_CHARS.has(text),
+      test: evaluateCompetingYakuAgainstSaka,
     },
     {
       id: "direction-sen-falling-pair",
@@ -6794,6 +6839,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return kept.length >= 3 ? kept : stroke;
   }
 
+  function buildRobustRecognitionConfirmationStrokes(strokes, guide = getCanvasGuide()) {
+    const source = (Array.isArray(strokes) ? strokes : []).map((stroke) =>
+      trimStrokeEndpointsForShape(stroke, RECOGNITION_CONFIRMATION_ENDPOINT_TRIM_RATIO)
+    );
+    return normalizeStrokesToGuide(source, guide, GOOGLE_CONFIRMATION_PADDING_RATIO);
+  }
+
   function buildInkGlyphShapeModel(strokes, fitMode = "aspect") {
     const source = (Array.isArray(strokes) ? strokes : []).filter((stroke) => stroke?.length > 1);
     const pointCount = source.reduce((sum, stroke) => sum + stroke.length, 0);
@@ -7129,7 +7181,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         );
     const displacedStroke = evaluateDisplacedStrokeEvidence(strokes, glyph, comparison);
     const sparseConnectedScale = sparseConnectedAgreement ? 0.78 : 1;
-    const penalty = Math.min(
+    const rawPenalty = Math.min(
       3.4,
       (
         Math.max(0, comparison.score - GLYPH_SHAPE_SCORE_FLOOR) * 10 +
@@ -7138,11 +7190,20 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       ) * sparseConnectedScale +
       displacedStroke.penalty,
     );
+    const strongComponentOverride = text === "阪" && hasLikelyKozatohenPrefix();
+    // 阝の2画が明確で画数も一致する「阪」は、活字体の阝形状との差だけで
+    // 拒否しない。右側の候補弁別と外部順位は維持し、字体点の上限だけを緩和する。
+    const penalty = strongComponentOverride
+      ? Math.min(STRONG_COMPONENT_GLYPH_PENALTY_LIMIT, rawPenalty)
+      : rawPenalty;
     return {
       available: true,
       model: "han-glyph",
-      hardReject: hardReject || displacedStroke.hardReject,
+      hardReject: strongComponentOverride
+        ? false
+        : hardReject || displacedStroke.hardReject,
       penalty: Math.round(penalty * 1000) / 1000,
+      strongComponentOverride,
       displacedStroke,
       thresholds: {
         hardScore: Math.round(hardScore * 1000) / 1000,
@@ -7993,6 +8054,135 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           three: getRecognitionConsensusBonus(threeVariantMemberships),
         },
       );
+      add(
+        "simplified-food-glyph-normalizes-to-japanese-standard",
+        normalizeCandidateText("饭") === "飯",
+        normalizeCandidateText("饭"),
+      );
+      const resolvedVariantDisagreement = {
+        accepted: [
+          {
+            text: "兵",
+            score: 0.2,
+            glyphShape: { available: true, penalty: 0.4, score: 0.1 },
+          },
+          {
+            text: "社",
+            score: 1.8,
+            glyphShape: { available: true, penalty: 0.5, score: 0.11 },
+          },
+        ],
+        margin: 1.6,
+        sourceGroups: [
+          { source: "google", variant: "raw", candidates: ["社", "兵"] },
+          { source: "google", variant: "normalized", candidates: ["兵", "社"] },
+          { source: "google", variant: "normalized-confirmation", candidates: ["兵", "社"] },
+        ],
+      };
+      add(
+        "third-google-variant-resolves-two-way-disagreement-without-local-reentry",
+        !hasGoogleHanVariantDisagreement(resolvedVariantDisagreement) &&
+          !shouldTryLocalHanFallback(resolvedVariantDisagreement),
+        resolvedVariantDisagreement,
+      );
+      const robustRankGroups = [
+        { source: "google", variant: "raw", penalty: 0, candidates: ["島", "庫"] },
+        { source: "google", variant: "normalized", penalty: 0.28, candidates: ["庫", "島"] },
+        { source: "google", variant: "normalized-confirmation", penalty: 0.34, candidates: ["庫", "島"] },
+      ];
+      const transientRawLeaderFusion = getRobustSameEngineVariantRankFusion([
+        { source: "google", variant: "raw", rank: 0, penalty: 0 },
+        { source: "google", variant: "normalized", rank: 1, penalty: 0.28 },
+        { source: "google", variant: "normalized-confirmation", rank: 1, penalty: 0.34 },
+      ], robustRankGroups);
+      const repeatedLeaderFusion = getRobustSameEngineVariantRankFusion([
+        { source: "google", variant: "raw", rank: 1, penalty: 0 },
+        { source: "google", variant: "normalized", rank: 0, penalty: 0.28 },
+        { source: "google", variant: "normalized-confirmation", rank: 0, penalty: 0.34 },
+      ], robustRankGroups);
+      add(
+        "three-variant-rank-fusion-prefers-repeated-leader-over-transient-raw-leader",
+        transientRawLeaderFusion.penalty >= repeatedLeaderFusion.penalty + 0.15,
+        { transientRawLeaderFusion, repeatedLeaderFusion },
+      );
+      add(
+        "two-variant-path-does-not-use-robust-rank-fusion",
+        getRobustSameEngineVariantRankFusion(twoVariantMemberships, robustRankGroups.slice(0, 2)).penalty === 0,
+      );
+      const confirmationSourceStroke = [Array.from({ length: 24 }, (_, index) => ({
+        x: 10 + index * 5,
+        y: 20 + Math.sin(index / 4) * 10,
+        t: index * 4,
+      }))];
+      const ordinaryConfirmation = normalizeStrokesToGuide(
+        confirmationSourceStroke,
+        { width: 160, height: 160 },
+        GOOGLE_CONFIRMATION_PADDING_RATIO,
+      );
+      const robustConfirmation = buildRobustRecognitionConfirmationStrokes(
+        confirmationSourceStroke,
+        { width: 160, height: 160 },
+      );
+      add(
+        "robust-confirmation-trims-endpoint-noise-without-dropping-strokes",
+        robustConfirmation.length === ordinaryConfirmation.length &&
+          robustConfirmation[0].length < ordinaryConfirmation[0].length &&
+          robustConfirmation[0].length >= 3,
+        { ordinaryPoints: ordinaryConfirmation[0].length, robustPoints: robustConfirmation[0].length },
+      );
+      const kozatohenPreviousStrokes = state.strokes;
+      try {
+        state.strokes = [
+          [{ x: 12, y: 12 }, { x: 32, y: 18 }, { x: 20, y: 38 }],
+          [{ x: 16, y: 34 }, { x: 16, y: 108 }],
+          [{ x: 50, y: 18 }, { x: 108, y: 18 }],
+          [{ x: 54, y: 38 }, { x: 98, y: 38 }],
+          [{ x: 74, y: 20 }, { x: 52, y: 96 }],
+          [{ x: 52, y: 60 }, { x: 102, y: 104 }],
+          [{ x: 96, y: 40 }, { x: 70, y: 82 }],
+        ];
+        const kozatohenEvidence = evaluateKozatohenPrefixEvidence();
+        const sakaGlyph = evaluateCandidateGlyphShape("阪");
+        const sakaEnsemble = evaluateCandidateEnsemble([
+          { source: "google", variant: "raw", candidates: ["饭", "岐", "阪"] },
+        ], { rawCount: 7, virtualCount: 7 });
+        const sakaAgainstYaku = evaluateSakaAgainstYakuStructure();
+        const yakuOnlySakaEnsemble = evaluateCandidateEnsemble([
+          { source: "google", variant: "raw", candidates: ["阨"] },
+        ], { rawCount: 7, virtualCount: 7 });
+        add(
+          "kozatohen-prefix-recovers-han-and-rejects-competing-radicals",
+          kozatohenEvidence.status === "expected" &&
+            evaluateCompetingPrefixAgainstKozatohen().hardReject === true &&
+            sakaGlyph.strongComponentOverride === true &&
+            sakaGlyph.hardReject === false &&
+            sakaGlyph.penalty <= STRONG_COMPONENT_GLYPH_PENALTY_LIMIT &&
+            sakaEnsemble.text === "阪" &&
+            STRUCTURAL_ALTERNATIVE_RULES.some((rule) =>
+              rule.source === "岐" && rule.target === "阪" && rule.test()
+            ),
+          { kozatohenEvidence, sakaGlyph, sakaEnsemble },
+        );
+        add(
+          "saka-crossed-mata-rejects-yaku-candidate",
+          sakaAgainstYaku.status === "expected" &&
+            evaluateCompetingYakuAgainstSaka().hardReject === true &&
+            getCandidateStrokeCount("阨") === 7,
+          { sakaAgainstYaku, yakuCount: getCandidateStrokeCount("阨") },
+        );
+        add(
+          "yaku-only-source-recovers-saka-without-answer-key",
+          yakuOnlySakaEnsemble.text === "阪" &&
+            yakuOnlySakaEnsemble.accepted.some((item) => item.text === "阪") &&
+            yakuOnlySakaEnsemble.evaluations.find((item) => item.text === "阨")?.pass === false &&
+            STRUCTURAL_ALTERNATIVE_RULES.some((rule) =>
+              rule.source === "阨" && rule.target === "阪" && rule.test()
+            ),
+          { yakuOnlySakaEnsemble },
+        );
+      } finally {
+        state.strokes = kozatohenPreviousStrokes;
+      }
       const denseFinalizedStroke = Array.from({ length: 420 }, (_, index) => ({
         x: index * 0.7,
         y: 40 + Math.sin(index / 18) * 8,
@@ -9120,6 +9310,157 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       penalty: status === "ambiguous" ? penalty : 0,
       details,
     };
+  }
+
+  function evaluateKozatohenPrefixEvidence() {
+    const source = state.strokes.filter((stroke) =>
+      Array.isArray(stroke) && stroke.length > 1
+    );
+    if (source.length < 3) {
+      return createContrastiveDecision("unavailable", { reason: "missing-prefix-strokes" });
+    }
+
+    const bounds = getStrokesBounds(source);
+    const first = getStrokeGeometry(source[0]);
+    const second = getStrokeGeometry(source[1]);
+    const third = getStrokeGeometry(source[2]);
+    const prefixBounds = getStrokesBounds(source.slice(0, 2));
+    if (!bounds || !first || !second || !third || !prefixBounds) {
+      return createContrastiveDecision("unavailable", { reason: "missing-prefix-geometry" });
+    }
+
+    const firstBent =
+      first.width >= bounds.width * 0.025 &&
+      first.height >= bounds.height * 0.075 &&
+      first.length >= Math.hypot(bounds.width, bounds.height) * 0.075;
+    const secondVertical =
+      second.height >= bounds.height * 0.24 &&
+      second.height >= second.width * 1.25;
+    const prefixOnLeft =
+      prefixBounds.right <= bounds.left + bounds.width * 0.54 &&
+      (prefixBounds.left + prefixBounds.right) / 2 <= bounds.left + bounds.width * 0.36;
+    const thirdStartsMainComponent =
+      third.centerX >= bounds.left + bounds.width * 0.30;
+    const thirdStillInLeftPrefix =
+      third.centerX <= bounds.left + bounds.width * 0.36 &&
+      third.right <= bounds.left + bounds.width * 0.52;
+    const details = {
+      firstBent,
+      secondVertical,
+      prefixOnLeft,
+      thirdStartsMainComponent,
+      thirdStillInLeftPrefix,
+      firstWidthRatio: first.width / Math.max(1, bounds.width),
+      firstHeightRatio: first.height / Math.max(1, bounds.height),
+      secondHeightRatio: second.height / Math.max(1, bounds.height),
+      prefixRightRatio: (prefixBounds.right - bounds.left) / Math.max(1, bounds.width),
+      thirdCenterRatio: (third.centerX - bounds.left) / Math.max(1, bounds.width),
+    };
+
+    if (firstBent && secondVertical && prefixOnLeft && thirdStartsMainComponent) {
+      return createContrastiveDecision("expected", details);
+    }
+    if (thirdStillInLeftPrefix || (!firstBent && first.width >= bounds.width * 0.16)) {
+      return createContrastiveDecision("competing", details);
+    }
+    return createContrastiveDecision("ambiguous", details);
+  }
+
+  function hasLikelyKozatohenPrefix() {
+    return evaluateKozatohenPrefixEvidence().status === "expected";
+  }
+
+  function evaluateCompetingPrefixAgainstKozatohen() {
+    const evidence = evaluateKozatohenPrefixEvidence();
+    return evidence.status === "expected"
+      ? createContrastiveDecision("competing", evidence.details)
+      : createContrastiveDecision("unavailable", evidence.details);
+  }
+
+  function evaluateSakaAgainstYakuStructure() {
+    const prefix = evaluateKozatohenPrefixEvidence();
+    if (prefix.status !== "expected") {
+      return createContrastiveDecision("unavailable", {
+        reason: "kozatohen-not-confirmed",
+        prefix: prefix.details,
+      });
+    }
+
+    const source = state.strokes.filter((stroke) =>
+      Array.isArray(stroke) && stroke.length > 1
+    );
+    const bounds = getStrokesBounds(source);
+    if (source.length < 7 || !bounds) {
+      return createContrastiveDecision("unavailable", {
+        reason: "missing-right-component-strokes",
+        strokeCount: source.length,
+      });
+    }
+
+    // 「阪」の右側の又は、終盤に左右へ開く二つの払いが内部で交差する。
+    // 「阨」の右側の厄は折れ・囲いで終わり、この交差を持たない。
+    // 最後の4画だけを調べ、こざとへんの形や活字体の輪郭差には依存しない。
+    const tail = source.slice(-4).map((stroke, index) => ({
+      index: source.length - 4 + index,
+      stroke,
+      geometry: getStrokeGeometry(stroke),
+    })).filter((item) => item.geometry);
+    const requiredDrop = Math.max(7, bounds.height * 0.12);
+    const requiredSide = Math.max(6, bounds.width * 0.08);
+    const downLeft = tail.filter(({ geometry }) =>
+      geometry.end.y - geometry.start.y >= requiredDrop &&
+      geometry.end.x - geometry.start.x <= -requiredSide
+    );
+    const downRight = tail.filter(({ geometry }) =>
+      geometry.end.y - geometry.start.y >= requiredDrop &&
+      geometry.end.x - geometry.start.x >= requiredSide
+    );
+    const diagonal = Math.max(1, Math.hypot(bounds.width, bounds.height));
+    let crossedPair = null;
+    for (const left of downLeft) {
+      for (const right of downRight) {
+        const relation = getStrokeClosestRelation(left.stroke, right.stroke);
+        const interiorCross =
+          relation.distance <= diagonal * 0.055 &&
+          relation.positionA >= 0.08 && relation.positionA <= 0.92 &&
+          relation.positionB >= 0.08 && relation.positionB <= 0.92;
+        if (interiorCross) {
+          crossedPair = {
+            leftIndex: left.index,
+            rightIndex: right.index,
+            distanceRatio: relation.distance / diagonal,
+            leftPosition: relation.positionA,
+            rightPosition: relation.positionB,
+          };
+          break;
+        }
+      }
+      if (crossedPair) break;
+    }
+
+    const details = {
+      prefix: prefix.details,
+      strokeCount: source.length,
+      requiredDrop,
+      requiredSide,
+      downLeft: downLeft.map((item) => item.index),
+      downRight: downRight.map((item) => item.index),
+      crossedPair,
+    };
+    return crossedPair
+      ? createContrastiveDecision("expected", details)
+      : createContrastiveDecision("ambiguous", details);
+  }
+
+  function hasLikelySakaAgainstYakuStructure() {
+    return evaluateSakaAgainstYakuStructure().status === "expected";
+  }
+
+  function evaluateCompetingYakuAgainstSaka() {
+    const evidence = evaluateSakaAgainstYakuStructure();
+    return evidence.status === "expected"
+      ? createContrastiveDecision("competing", evidence.details)
+      : createContrastiveDecision("unavailable", evidence.details);
   }
 
   function evaluateHorizontalLengthContrast(startIndex, upperOffset, lowerOffset, expected) {
@@ -10990,13 +11331,32 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     }
     const rawLeader = getAcceptedSourceGroupLeader(evaluation, "google", "raw");
     const normalizedLeader = getAcceptedSourceGroupLeader(evaluation, "google", "normalized");
-    return Boolean(
-      rawLeader &&
-      normalizedLeader &&
-      isCjkIdeograph(rawLeader) &&
-      isCjkIdeograph(normalizedLeader) &&
-      normalizeComparableText(rawLeader) !== normalizeComparableText(normalizedLeader)
+    if (
+      !rawLeader ||
+      !normalizedLeader ||
+      !isCjkIdeograph(rawLeader) ||
+      !isCjkIdeograph(normalizedLeader) ||
+      normalizeComparableText(rawLeader) === normalizeComparableText(normalizedLeader)
+    ) {
+      return false;
+    }
+    const confirmationLeader = getAcceptedSourceGroupLeader(
+      evaluation,
+      "google",
+      "normalized-confirmation",
     );
+    // 3つ目の独立変形が先行2候補のどちらかを再支持した場合は、
+    // 多数傾向で決着済みとみなし、不安定な字体フォールバックを再介入させない。
+    if (
+      confirmationLeader &&
+      (
+        normalizeComparableText(confirmationLeader) === normalizeComparableText(rawLeader) ||
+        normalizeComparableText(confirmationLeader) === normalizeComparableText(normalizedLeader)
+      )
+    ) {
+      return false;
+    }
+    return true;
   }
 
   function getSameEngineVariantRankInstability(memberships) {
@@ -11038,6 +11398,68 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     return {
       penalty: Math.round(Math.min(0.72, penalty) * 1000) / 1000,
+      details,
+    };
+  }
+
+  function getRobustSameEngineVariantRankFusion(memberships, sourceGroups) {
+    const directGroupsBySource = new Map();
+    (Array.isArray(sourceGroups) ? sourceGroups : []).forEach((group) => {
+      const source = String(group?.source || "");
+      const variant = String(group?.variant || "");
+      if (
+        !source ||
+        source === "local-han" ||
+        source === "local-kana" ||
+        variant.startsWith("repair-")
+      ) {
+        return;
+      }
+      if (!directGroupsBySource.has(source)) {
+        directGroupsBySource.set(source, []);
+      }
+      directGroupsBySource.get(source).push(group);
+    });
+
+    let penalty = 0;
+    const details = [];
+    directGroupsBySource.forEach((groups, source) => {
+      if (groups.length < 3) {
+        return;
+      }
+      const costs = groups.map((group) => {
+        const matching = (Array.isArray(memberships) ? memberships : [])
+          .filter((membership) =>
+            membership.source === source && membership.variant === group.variant
+          )
+          .sort((left, right) => {
+            const leftCost = (Number.isFinite(left.rank) ? left.rank : 0) *
+              RECOGNITION_SOURCE_RANK_WEIGHT +
+              (Number.isFinite(left.penalty) ? left.penalty : 0);
+            const rightCost = (Number.isFinite(right.rank) ? right.rank : 0) *
+              RECOGNITION_SOURCE_RANK_WEIGHT +
+              (Number.isFinite(right.penalty) ? right.penalty : 0);
+            return leftCost - rightCost;
+          })[0];
+        const missingRank = Math.min(4, Math.max(2, group.candidates?.length || 2));
+        const rank = Number.isFinite(matching?.rank) ? matching.rank : missingRank;
+        const membershipPenalty = Number.isFinite(matching?.penalty)
+          ? matching.penalty
+          : Number.isFinite(group.penalty) ? group.penalty : 0;
+        return rank * RECOGNITION_SOURCE_RANK_WEIGHT + membershipPenalty;
+      }).sort((left, right) => left - right);
+      const best = costs[0];
+      const middle = costs[Math.floor(costs.length / 2)];
+      const sourcePenalty = Math.min(
+        RECOGNITION_ROBUST_RANK_FUSION_LIMIT,
+        Math.max(0, middle - best) * RECOGNITION_ROBUST_RANK_FUSION_SCALE,
+      );
+      penalty += sourcePenalty;
+      details.push({ source, costs, best, middle, penalty: sourcePenalty });
+    });
+
+    return {
+      penalty: Math.round(Math.min(RECOGNITION_ROBUST_RANK_FUSION_LIMIT, penalty) * 1000) / 1000,
       details,
     };
   }
@@ -11134,6 +11556,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       Number.isFinite(evaluation.margin) &&
       evaluation.margin <= HAN_CONSENSUS_CONFIRM_MARGIN &&
       (
+        hasGoogleHanVariantDisagreement(evaluation) ||
         top.glyphShape.penalty >= HAN_CONSENSUS_CONFIRM_GLYPH_PENALTY ||
         top.glyphShape.score >= HAN_CONSENSUS_CONFIRM_GLYPH_SCORE
       )
@@ -11208,7 +11631,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
               source: group.source,
               variant: group.variant,
               rank,
-              penalty: group.penalty + 0.22,
+              penalty: group.penalty + (Number.isFinite(rule.penalty) ? rule.penalty : 0.22),
               alternativeOf: candidate,
               strokeStats: effectiveStrokeStats,
               transform: group.transform,
@@ -11340,6 +11763,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       // 「両方に含まれた」事実だけで同意扱いにしない。順位平均と順位差を
       // 小さな不安定度として加え、両入力で上位が安定した候補を優先する。
       const variantRankInstability = getSameEngineVariantRankInstability(scoringMemberships);
+      // 3変形目まで照合した曖昧ケースでは、最良だった1回だけでなく中央値も見る。
+      // 1・2回照合の通常経路には影響させず、端点差で生じた一時的な首位だけを抑える。
+      const robustVariantRankFusion = getRobustSameEngineVariantRankFusion(
+        scoringMemberships,
+        normalizedGroups,
+      );
 
       if (
         compatibility.unknownStrokeCount &&
@@ -11357,7 +11786,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           spatial.penalty +
           sourceRankPenalty -
           consensusBonus +
-          variantRankInstability.penalty
+          variantRankInstability.penalty +
+          robustVariantRankFusion.penalty
         : Number.POSITIVE_INFINITY;
       const repairMemberships = scoringMemberships.filter((item) =>
         String(item.variant || "").startsWith("repair-")
@@ -11385,6 +11815,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         variantCount: variants.size,
         independentVariantCount,
         variantRankInstability,
+        robustVariantRankFusion,
         repairSupported: repairMemberships.length > 0,
         repairRequired: repairMemberships.length > 0 && nonRepairMemberships.length === 0,
         selectedVariant: selectedMembershipCompatibility?.membership?.variant || "",
@@ -11843,10 +12274,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
         if (shouldConfirmWeakHanVariantConsensus(ensembleEvaluation)) {
           recognitionPath += "+google-confirmation";
-          const confirmationStrokes = normalizeStrokesToGuide(
+          const confirmationStrokes = buildRobustRecognitionConfirmationStrokes(
             recognitionStrokes,
             guide,
-            GOOGLE_CONFIRMATION_PADDING_RATIO,
           );
           googleConfirmationCandidates = await recognizeWithGoogle(confirmationStrokes);
           await yieldToPendingInput();
