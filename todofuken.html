@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="1.24.1" />
+    <meta name="application-version" content="1.25.0" />
     <style>
 :root {
   color-scheme: dark;
@@ -2146,6 +2146,7 @@ input:focus-visible,
 /* v1.22.0: single-source Han verification and variant-stability ranking */
 /* v1.23.0: weak-consensus confirmation, stale-recognition cancellation and bounded stroke storage */
 /* v1.24.1: distinguish Saka's crossed Mata component from the Yaku glyph */
+/* v1.25.0: prototype-compatible external Han ordering with bounded font-shape influence */
 .result-box,
 .review-menu,
 .result-list {
@@ -2313,7 +2314,7 @@ input:focus-visible,
 </style>
     <script id="digicanji-quiz-data" type="application/json">
 {
-  "quizId": "todofuken-v2",
+  "quizId": "todofuken-v25",
   "title": "４７都道府県",
   "questions": [
     {
@@ -3906,6 +3907,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
   const MAX_RECOGNITION_CORPUS_RECORDS = 80;
   const RECOGNITION_SOURCE_RANK_WEIGHT = 0.18;
+  // 旧プロトタイプの長所だった「外部認識器の候補順位」を残しつつ、
+  // 現行版の画数・部品・運筆方向による拒否は維持する。候補が教材漢字として
+  // 直接返された場合、端末フォントとの差だけで順位が大きく反転しないようにする。
+  const EXTERNAL_DIRECT_HAN_GLYPH_PENALTY_CAP = 0.64;
   const RECOGNITION_CROSS_ENGINE_BONUS = 1.35;
   const RECOGNITION_MULTI_VARIANT_BONUS = 0.18;
   const RECOGNITION_ADDITIONAL_VARIANT_BONUS = 0.12;
@@ -4046,6 +4051,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       test: hasLikelySakaAgainstYakuStructure,
       penalty: 0.06,
     },
+    {
+      source: "丘",
+      target: "生",
+      test: hasLikelySeiAgainstKyuStrokeOrder,
+      penalty: 0.06,
+    },
   ]);
 
   const SHITSU_SUFFIX_CHARS = new Set(Array.from("失鉄秩跌"));
@@ -4120,6 +4131,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const SEN_COMPONENT_SUFFIX_CHARS = new Set(Array.from("残浅桟銭践賎"));
   const KOZATOHEN_COMPETING_PREFIX_CHARS = new Set(Array.from("岐坂飯"));
   const YAKU_COMPONENT_COMPETING_CHARS = new Set(Array.from("阨"));
+  const KYU_COMPONENT_COMPETING_CHARS = new Set(Array.from("丘"));
 
   // 運筆方向の規則は文字ごとの分岐ではなく、同じ点画骨格を共有する部品族へ登録する。
   // 各規則は「部品の筆画範囲」と「その中の払いの方向」だけを宣言し、共通評価器を使う。
@@ -4219,6 +4231,16 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       id: "yaku-not-saka-crossed-mata",
       applies: (text) => YAKU_COMPONENT_COMPETING_CHARS.has(text),
       test: evaluateCompetingYakuAgainstSaka,
+    },
+    {
+      id: "sei-second-stroke-horizontal",
+      applies: (text) => text === "生",
+      test: evaluateSeiAgainstKyuStrokeOrder,
+    },
+    {
+      id: "kyu-not-sei-second-stroke-horizontal",
+      applies: (text) => KYU_COMPONENT_COMPETING_CHARS.has(text),
+      test: evaluateCompetingKyuAgainstSei,
     },
     {
       id: "direction-sen-falling-pair",
@@ -8183,6 +8205,82 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       } finally {
         state.strokes = kozatohenPreviousStrokes;
       }
+      const sourceAwareFixture = {
+        pass: true,
+        scorePenalty: 2.4,
+        glyphShape: { available: true, hardReject: false, penalty: 2.2 },
+      };
+      const directExternalPenalty = getSourceAwareCompatibilityPenalty(
+        "礼",
+        sourceAwareFixture,
+        [{ source: "google", variant: "raw", alternativeOf: "" }],
+      );
+      const localFallbackPenalty = getSourceAwareCompatibilityPenalty(
+        "礼",
+        sourceAwareFixture,
+        [{ source: "local", variant: "local-han", alternativeOf: "" }],
+      );
+      const repairPenalty = getSourceAwareCompatibilityPenalty(
+        "礼",
+        sourceAwareFixture,
+        [{ source: "google", variant: "repair-endpoint", alternativeOf: "" }],
+      );
+      add(
+        "direct-external-project-han-bounds-font-only-penalty",
+        directExternalPenalty.bounded === true &&
+          Math.abs(directExternalPenalty.penalty - 0.84) < 0.0001 &&
+          localFallbackPenalty.bounded === false && localFallbackPenalty.penalty === 2.4 &&
+          repairPenalty.bounded === false && repairPenalty.penalty === 2.4,
+        { directExternalPenalty, localFallbackPenalty, repairPenalty },
+      );
+
+      const seiKyuPreviousStrokes = state.strokes;
+      try {
+        state.strokes = [
+          [{ x: 24, y: 8 }, { x: 12, y: 34 }],
+          [{ x: 28, y: 28 }, { x: 88, y: 28 }],
+          [{ x: 22, y: 48 }, { x: 84, y: 48 }],
+          [{ x: 56, y: 14 }, { x: 56, y: 92 }],
+          [{ x: 14, y: 78 }, { x: 96, y: 78 }],
+        ];
+        const seiEvidence = evaluateSeiAgainstKyuStrokeOrder();
+        const seiAlternativeEvidence = buildCandidateEvidence(
+          [{ source: "google", variant: "raw", candidates: ["丘"] }],
+          { rawCount: 5, virtualCount: 5 },
+        );
+        add(
+          "sei-horizontal-second-stroke-rejects-kyu-and-recovers-sei",
+          seiEvidence.status === "expected" &&
+            evaluateCompetingKyuAgainstSei().hardReject === true &&
+            seiAlternativeEvidence.get("生")?.some((item) => item.alternativeOf === "丘"),
+          {
+            seiEvidence,
+            seiAlternative: seiAlternativeEvidence.get("生"),
+          },
+        );
+
+        state.strokes = [
+          [{ x: 24, y: 8 }, { x: 12, y: 34 }],
+          [{ x: 30, y: 18 }, { x: 30, y: 82 }],
+          [{ x: 24, y: 42 }, { x: 86, y: 42 }],
+          [{ x: 68, y: 18 }, { x: 68, y: 84 }],
+          [{ x: 14, y: 78 }, { x: 96, y: 78 }],
+        ];
+        const kyuEvidence = evaluateSeiAgainstKyuStrokeOrder();
+        const kyuAlternativeEvidence = buildCandidateEvidence(
+          [{ source: "google", variant: "raw", candidates: ["丘"] }],
+          { rawCount: 5, virtualCount: 5 },
+        );
+        add(
+          "kyu-vertical-second-stroke-is-not-rewritten-to-sei",
+          kyuEvidence.status === "competing" &&
+            evaluateCompetingKyuAgainstSei().status === "expected" &&
+            !kyuAlternativeEvidence.has("生"),
+          { kyuEvidence, alternatives: Array.from(kyuAlternativeEvidence.keys()) },
+        );
+      } finally {
+        state.strokes = seiKyuPreviousStrokes;
+      }
       const denseFinalizedStroke = Array.from({ length: 420 }, (_, index) => ({
         x: index * 0.7,
         y: 40 + Math.sin(index / 18) * 8,
@@ -9461,6 +9559,66 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return evidence.status === "expected"
       ? createContrastiveDecision("competing", evidence.details)
       : createContrastiveDecision("unavailable", evidence.details);
+  }
+
+  function evaluateSeiAgainstKyuStrokeOrder() {
+    const source = state.strokes.filter((stroke) =>
+      Array.isArray(stroke) && stroke.length > 1
+    );
+    if (source.length !== 5) {
+      return createContrastiveDecision("unavailable", {
+        reason: "unexpected-stroke-count",
+        strokeCount: source.length,
+      });
+    }
+
+    const bounds = getStrokesBounds(source);
+    const second = getStrokeGeometry(source[1]);
+    if (!bounds || !second) {
+      return createContrastiveDecision("unavailable", {
+        reason: "missing-second-stroke-geometry",
+      });
+    }
+
+    // 「生」は2画目が横画、「丘」は2画目が縦画になる。完成字体のフォント差ではなく、
+    // ユーザーが実際に書いた運筆を使うため、似た輪郭でも安定して弁別できる。
+    const widthRatio = second.width / Math.max(1, bounds.width);
+    const heightRatio = second.height / Math.max(1, bounds.height);
+    const horizontal = widthRatio >= 0.20 && second.width >= second.height * 1.65;
+    const vertical = heightRatio >= 0.20 && second.height >= second.width * 1.65;
+    const details = {
+      widthRatio,
+      heightRatio,
+      aspectRatio: second.width / Math.max(1, second.height),
+      horizontal,
+      vertical,
+    };
+
+    if (horizontal) {
+      return createContrastiveDecision("expected", details);
+    }
+    if (vertical) {
+      return createContrastiveDecision("competing", details);
+    }
+    return createContrastiveDecision("ambiguous", details, 0.18);
+  }
+
+  function hasLikelySeiAgainstKyuStrokeOrder() {
+    return evaluateSeiAgainstKyuStrokeOrder().status === "expected";
+  }
+
+  function evaluateCompetingKyuAgainstSei() {
+    const evidence = evaluateSeiAgainstKyuStrokeOrder();
+    if (evidence.status === "expected") {
+      return createContrastiveDecision("competing", evidence.details);
+    }
+    if (evidence.status === "competing") {
+      return createContrastiveDecision("expected", evidence.details);
+    }
+    if (evidence.status === "ambiguous") {
+      return createContrastiveDecision("ambiguous", evidence.details, evidence.penalty);
+    }
+    return createContrastiveDecision("unavailable", evidence.details);
   }
 
   function evaluateHorizontalLengthContrast(startIndex, upperOffset, lowerOffset, expected) {
@@ -11680,6 +11838,47 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return evidence;
   }
 
+  function isDirectExternalHanMembership(text, membership) {
+    const source = String(membership?.source || "");
+    const variant = String(membership?.variant || "");
+    return (
+      isCjkIdeograph(text) &&
+      getLocalHanRecognitionUniverseSet().has(text) &&
+      ["native", "google", "legacy"].includes(source) &&
+      !variant.startsWith("repair-") &&
+      variant !== "local-han" &&
+      !membership?.alternativeOf
+    );
+  }
+
+  function getSourceAwareCompatibilityPenalty(text, compatibility, memberships) {
+    const originalPenalty = Number.isFinite(compatibility?.scorePenalty)
+      ? compatibility.scorePenalty
+      : 0;
+    const glyphPenalty = Number.isFinite(compatibility?.glyphShape?.penalty)
+      ? compatibility.glyphShape.penalty
+      : 0;
+    const directExternal = (Array.isArray(memberships) ? memberships : [])
+      .some((membership) => isDirectExternalHanMembership(text, membership));
+    const canBoundGlyphPenalty = Boolean(
+      directExternal &&
+      compatibility?.pass &&
+      compatibility?.glyphShape?.available &&
+      !compatibility?.glyphShape?.hardReject &&
+      glyphPenalty > EXTERNAL_DIRECT_HAN_GLYPH_PENALTY_CAP
+    );
+    const adjustedGlyphPenalty = canBoundGlyphPenalty
+      ? EXTERNAL_DIRECT_HAN_GLYPH_PENALTY_CAP
+      : glyphPenalty;
+    return {
+      penalty: Math.max(0, originalPenalty - glyphPenalty + adjustedGlyphPenalty),
+      originalPenalty,
+      glyphPenalty,
+      adjustedGlyphPenalty,
+      bounded: canBoundGlyphPenalty,
+    };
+  }
+
   function evaluateCandidateEnsemble(sourceGroups, strokeStats = estimateInputStrokeStats()) {
     const normalizedGroups = normalizeCandidateSourceGroups(sourceGroups);
     const evidence = buildCandidateEvidence(normalizedGroups, strokeStats);
@@ -11745,6 +11944,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const scoringMemberships = passingCompatibility.length > 0
         ? passingCompatibility.map((item) => item.membership)
         : memberships;
+      // 外部認識器が教材内漢字を安全検査（画数・構造・字形hard reject）まで通した場合、
+      // 活字体との輪郭差だけで候補順を大きく入れ替えない。初期プロトタイプで有効だった
+      // 外部候補順を尊重しつつ、修復候補とローカル総当たりには従来の厳しい字形点を残す。
+      const sourceAwareCompatibility = getSourceAwareCompatibilityPenalty(
+        text,
+        compatibility,
+        scoringMemberships,
+      );
       const engines = new Set(scoringMemberships.map((item) => item.source));
       const variants = new Set(scoringMemberships.map((item) => `${item.source}:${item.variant}`));
       const crossEngineConsensus = engines.has("native") && engines.has("google");
@@ -11782,7 +11989,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const effectiveStrokeStats = selectedMembershipCompatibility?.strokeStats || strokeStats;
       const score = pass
         ? getCandidateStrokeRank(text, effectiveStrokeStats, 0) +
-          compatibility.scorePenalty +
+          sourceAwareCompatibility.penalty +
           spatial.penalty +
           sourceRankPenalty -
           consensusBonus +
@@ -11807,6 +12014,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         expectedRange: compatibility.expectedRange,
         structure: compatibility.structure,
         glyphShape: compatibility.glyphShape || null,
+        sourceAwareCompatibility,
         unknownStrokeCount: Boolean(compatibility.unknownStrokeCount),
         spatial,
         memberships,
