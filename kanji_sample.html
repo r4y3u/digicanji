@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>4年　全</title>
-    <meta name="application-version" content="2.0.0" />
+    <meta name="application-version" content="2.0.1" />
     <style>
 :root {
   color-scheme: dark;
@@ -420,6 +420,33 @@ button {
   text-align: center;
 }
 
+.character-slot.is-no-candidate {
+  border-color: rgba(240, 211, 106, 0.58);
+  background:
+    linear-gradient(180deg, rgba(240, 211, 106, 0.12), rgba(240, 211, 106, 0.035)),
+    rgba(25, 48, 40, 0.54);
+  box-shadow:
+    inset 0 0 0 2px rgba(240, 211, 106, 0.18),
+    inset 0 0 22px rgba(240, 211, 106, 0.09);
+}
+
+.character-slot.is-no-candidate.is-active {
+  border-color: rgba(240, 211, 106, 0.92);
+  box-shadow:
+    0 0 0 2px rgba(240, 211, 106, 0.17),
+    inset 0 0 0 2px rgba(240, 211, 106, 0.24),
+    inset 0 0 25px rgba(240, 211, 106, 0.12);
+}
+
+.no-candidate-symbol {
+  color: rgba(244, 240, 223, 0.92);
+  font-family: var(--educational-font);
+  font-size: clamp(1.25rem, 5.2vmin, 2.7rem);
+  font-weight: 850;
+  line-height: 1;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.28);
+}
+
 .character-slot[data-busy="true"]::after {
   content: "認識中";
   position: absolute;
@@ -538,6 +565,53 @@ button {
 .confirm-button:disabled {
   cursor: default;
   opacity: 0.42;
+}
+
+.recognition-wait {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgba(10, 27, 21, 0.38);
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+  cursor: wait;
+}
+
+.recognition-wait[hidden] {
+  display: none;
+}
+
+.recognition-wait-card {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(88%, 280px);
+  padding: 10px 14px;
+  border: 1px solid rgba(244, 240, 223, 0.28);
+  border-radius: 999px;
+  background: rgba(18, 38, 30, 0.94);
+  color: var(--ink);
+  box-shadow: 0 5px 18px rgba(0, 0, 0, 0.24);
+  font-size: clamp(0.72rem, 1.8vw, 0.9rem);
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.recognition-wait-ring {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(244, 240, 223, 0.22);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: recognition-wait-spin 720ms linear infinite;
+}
+
+@keyframes recognition-wait-spin {
+  to { transform: rotate(360deg); }
 }
 
 .advance-button.is-final-answer {
@@ -2246,6 +2320,7 @@ input:focus-visible,
 /* v1.23.0: weak-consensus confirmation, stale-recognition cancellation and bounded stroke storage */
 /* v1.24.1: distinguish Saka's crossed Mata component from the Yaku glyph */
 /* v1.25.0: prototype-compatible external Han ordering with bounded font-shape influence */
+/* v2.0.1: explicit no-candidate symbol and recognition-safe answer finalization */
 .result-box,
 .review-menu,
 .result-list {
@@ -2436,6 +2511,13 @@ input:focus-visible,
         <section class="pad-stage" aria-label="手書き入力">
           <canvas id="handwriting-pad" aria-label="手書き入力パッド"></canvas>
 
+          <div id="recognition-wait" class="recognition-wait" role="status" aria-live="polite" hidden>
+            <span class="recognition-wait-card">
+              <span class="recognition-wait-ring" aria-hidden="true"></span>
+              <span>認識を完了しています</span>
+            </span>
+          </div>
+
           <div class="review-control">
             <button id="review-button" class="pad-overlay-button review-button" type="button" aria-expanded="false" aria-controls="review-menu">
               見直し
@@ -2567,6 +2649,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const padStage = document.querySelector(".pad-stage");
   const actions = document.querySelector(".actions");
   const canvas = document.querySelector("#handwriting-pad");
+  const recognitionWait = document.querySelector("#recognition-wait");
   const resultBox = document.querySelector("#recognized-text");
   const questionText = document.querySelector("#question-text");
   const progressText = document.querySelector("#progress-text");
@@ -2672,6 +2755,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const MIN_RECOGNITION_INK_LENGTH = 36;
   const RECOGNITION_DRAW_DELAY_MS = 180;
   const RECOGNITION_FINISH_DELAY_MS = 55;
+  const FINALIZATION_WAIT_UI_DELAY_MS = 180;
+  const FINALIZATION_WAIT_POLL_MS = 24;
   const TRACE_RECOGNITION_DELAY_MS = 90;
   const RECOGNITION_POINT_DISTANCE = 2.25;
   const RECOGNITION_MAX_POINTS_PER_STROKE = 180;
@@ -3310,6 +3395,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     explanationIndex: -1,
     confirmationPending: false,
     confirmationItemIndex: -1,
+    finalizationPending: false,
+    finalizationWaitTimer: 0,
     trace: {
       itemIndex: -1,
       answer: "",
@@ -3340,7 +3427,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const messages = {
     loading: "準備中...",
     empty: "手書きしてください",
-    noCandidate: "候補なし",
+    noCandidate: "？",
     networkUnavailable: "描画はできますが、認識に接続できません",
   };
 
@@ -3714,6 +3801,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     for (let index = 0; index < count; index += 1) {
       const record = state.slots[index];
+      const isNoCandidate = !record.text && record.message === messages.noCandidate;
       const slot = document.createElement("span");
       slot.className = "character-slot";
       slot.dataset.index = String(index);
@@ -3739,6 +3827,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           slot.classList.add("is-small-kana");
           slot.setAttribute("aria-label", `${index + 1}文字目、小書きの${record.text}`);
         }
+      } else if (isNoCandidate) {
+        slot.classList.add("is-no-candidate");
+        slot.setAttribute("aria-label", `${index + 1}文字目、認識なし`);
+        const symbol = document.createElement("span");
+        symbol.className = "no-candidate-symbol";
+        symbol.setAttribute("aria-hidden", "true");
+        symbol.textContent = "？";
+        slot.append(symbol);
       } else if (index === state.activeSlotIndex && record.message && record.message !== messages.empty) {
         const message = document.createElement("span");
         message.className = "slot-message";
@@ -11592,6 +11688,98 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     updateBusyIndicator();
   }
 
+  function hasRecognitionWorkForRecord(record) {
+    if (!record) return false;
+    return Boolean(
+      record.recognitionTimer ||
+      state.recognitionQueue.some((job) => job.record === record) ||
+      state.activeRecognitionJob?.record === record
+    );
+  }
+
+  function isRecognitionPendingForRecord(record) {
+    return Boolean(record?.recognitionBusy || hasRecognitionWorkForRecord(record));
+  }
+
+  function ensureItemRecognitionScheduled(item) {
+    if (!item?.slots) return;
+    item.slots.forEach((record, slotIndex) => {
+      if (!hasMeaningfulInkFor(record.strokes) || record.text) return;
+
+      if (record.recognitionTimer) {
+        // 「確定」「回答」時は通常の入力待ち時間だけを省き、既存の直列キューへ渡す。
+        scheduleRecognition(0, record, item, slotIndex);
+        return;
+      }
+
+      const isSettledWithoutText = [messages.noCandidate, messages.networkUnavailable]
+        .includes(record.message);
+      if (!hasRecognitionWorkForRecord(record) && !isSettledWithoutText) {
+        scheduleRecognition(0, record, item, slotIndex);
+      }
+    });
+  }
+
+  function isItemRecognitionPending(item) {
+    if (!item?.slots) return false;
+    const isCurrentItem = state.session[state.currentQuestionIndex] === item;
+    return Boolean(
+      (isCurrentItem && isPointerInputActive()) ||
+      item.slots.some((record) => isRecognitionPendingForRecord(record))
+    );
+  }
+
+  function setFinalizationPending(isPending) {
+    const pending = Boolean(isPending);
+    state.finalizationPending = pending;
+    learningScreen.classList.toggle("is-finalizing", pending);
+    learningScreen.setAttribute("aria-busy", pending ? "true" : "false");
+
+    if (pending) {
+      confirmButton.disabled = true;
+      advanceButton.disabled = true;
+      undoButton.disabled = true;
+      clearButton.disabled = true;
+      reviewButton.disabled = true;
+      setReviewMenuOpen(false);
+      return;
+    }
+
+    window.clearTimeout(state.finalizationWaitTimer);
+    state.finalizationWaitTimer = 0;
+    recognitionWait.hidden = true;
+    reviewButton.disabled = false;
+    clearButton.disabled = false;
+    renderProgress();
+    updateActionButtons();
+  }
+
+  async function waitForItemRecognition(item) {
+    if (!item || item.confirmed || state.finalizationPending) return false;
+
+    setFinalizationPending(true);
+    ensureItemRecognitionScheduled(item);
+    state.finalizationWaitTimer = window.setTimeout(() => {
+      if (state.finalizationPending && isItemRecognitionPending(item)) {
+        recognitionWait.hidden = false;
+      }
+    }, FINALIZATION_WAIT_UI_DELAY_MS);
+
+    try {
+      while (
+        state.session.includes(item) &&
+        !item.confirmed &&
+        isItemRecognitionPending(item)
+      ) {
+        await new Promise((resolve) => window.setTimeout(resolve, FINALIZATION_WAIT_POLL_MS));
+        ensureItemRecognitionScheduled(item);
+      }
+      return state.session.includes(item) && !item.confirmed;
+    } finally {
+      setFinalizationPending(false);
+    }
+  }
+
   async function runRecognition(job) {
     if (!isRecognitionJobCurrent(job)) {
       setRecordBusy(job?.record, false);
@@ -11918,6 +12106,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function moveSlot(delta) {
+    if (state.finalizationPending) return;
     const count = getVisibleSlotCount();
     const nextIndex = Math.max(0, Math.min(count - 1, state.activeSlotIndex + delta));
 
@@ -11934,7 +12123,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function undoLastStroke() {
-    if (state.strokes.length === 0) {
+    if (state.finalizationPending || state.strokes.length === 0) {
       return;
     }
 
@@ -11963,6 +12152,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function clearPad() {
+    if (state.finalizationPending) return;
     const record = getActiveInputRecord();
     window.clearTimeout(record.recognitionTimer);
     record.recognitionTimer = 0;
@@ -11989,7 +12179,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function updateActionButtons() {
     const count = getVisibleSlotCount();
-    undoButton.disabled = state.strokes.length === 0;
+    undoButton.disabled = state.finalizationPending || state.strokes.length === 0;
+    clearButton.disabled = state.finalizationPending;
     slotPositionText.textContent = `${state.activeSlotIndex + 1} / ${count}`;
     slotPosition.dataset.atStart = state.activeSlotIndex <= 0 ? "true" : "false";
     slotPosition.dataset.atEnd = state.activeSlotIndex >= count - 1 ? "true" : "false";
@@ -12285,7 +12476,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     progressBar.style.width = `${(current / total) * 100}%`;
     advanceButton.textContent = isFinalQuestion ? "回答" : "進む";
     advanceButton.classList.toggle("is-final-answer", isFinalQuestion);
-    confirmButton.disabled = Boolean(currentItem?.confirmed);
+    confirmButton.disabled = Boolean(currentItem?.confirmed) || state.finalizationPending;
+    advanceButton.disabled = state.finalizationPending;
     advanceButton.setAttribute(
       "aria-label",
       isFinalQuestion ? "回答して答え合わせへ進む" : "次の未確定問題へ進む",
@@ -12332,6 +12524,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function setReviewMenuOpen(isOpen) {
+    if (state.finalizationPending && isOpen) return;
     reviewMenu.hidden = !isOpen;
     reviewButton.setAttribute("aria-expanded", isOpen ? "true" : "false");
     if (isOpen && isVerticalLayout()) {
@@ -12345,6 +12538,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function goToProblem(index, { recognizeIfNeeded = true } = {}) {
+    if (state.finalizationPending) return;
     const destination = state.session[index];
     if (!destination || destination.confirmed) {
       return;
@@ -12377,6 +12571,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function startSession() {
     cancelAllRecognitionJobs();
+    window.clearTimeout(state.finalizationWaitTimer);
+    state.finalizationWaitTimer = 0;
+    state.finalizationPending = false;
+    recognitionWait.hidden = true;
+    learningScreen.classList.remove("is-finalizing");
+    learningScreen.setAttribute("aria-busy", "false");
     clearResultTimers();
     trimGlyphShapeModelCache(SESSION_GLYPH_CACHE_RETAINED);
     if (state.questions.length === 0) {
@@ -12403,9 +12603,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     scheduleLayoutFit();
   }
 
-  function handleAdvance() {
+  async function handleAdvance() {
+    if (state.finalizationPending) return;
     saveCurrentSessionState();
     if (isCurrentLastUnconfirmedQuestion()) {
+      const item = state.session[state.currentQuestionIndex];
+      if (!await waitForItemRecognition(item)) return;
+      if (state.session[state.currentQuestionIndex] !== item || item.confirmed) return;
+      saveCurrentSessionState();
       showResults();
       return;
     }
@@ -12592,9 +12797,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     window.requestAnimationFrame(() => confirmationSymbol.classList.add("is-visible"));
   }
 
-  function handleConfirmCurrent() {
+  async function handleConfirmCurrent() {
+    if (state.finalizationPending) return;
+    const itemIndex = state.currentQuestionIndex;
     const item = state.session[state.currentQuestionIndex];
     if (!item || item.confirmed) return;
+    saveCurrentSessionState();
+    if (!await waitForItemRecognition(item)) return;
+    if (state.currentQuestionIndex !== itemIndex || item.confirmed) return;
     saveCurrentSessionState();
     gradeSessionItem(item);
     item.confirmed = true;
@@ -12603,7 +12813,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     cancelRecognitionJobsForItem(item);
     renderProgress();
     updateReviewMenu();
-    showConfirmationFeedback(state.currentQuestionIndex);
+    showConfirmationFeedback(itemIndex);
   }
 
   function completeConfirmationFeedback() {
@@ -13659,6 +13869,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   canvas.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+    if (state.finalizationPending) return;
     prepareStroke(event);
   });
   canvas.addEventListener("pointermove", continueStroke);
