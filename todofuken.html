@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="2.0.1" />
+    <meta name="application-version" content="2.0.3" />
     <style>
 :root {
   color-scheme: dark;
@@ -2485,10 +2485,83 @@ input:focus-visible,
   transform-origin: center center;
 }
 
+/*
+ * v2.0.3: 文字別救済を廃止し、画数・既存構造・複数字形で正解候補漏れを一般回復する。
+ * v2.0.2: 確定直後は認識枠を比較できる状態のまま、解説だけを手書き欄へ重ねる。
+ * 全画面の暗幕・ぼかしを外し、JS が実測した pad-stage の内側へ収めるため、
+ * 横書き・縦書き・回転ポータブル・ブラウザUI伸縮のいずれでも認識枠を覆わない。
+ */
+.explanation-overlay[data-mode="confirmation"] {
+  display: block;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  touch-action: manipulation;
+}
+
+.explanation-overlay[data-mode="confirmation"] .explanation-dialog {
+  position: fixed;
+  top: var(--confirmation-dialog-top, 50%);
+  left: var(--confirmation-dialog-left, 50%);
+  width: var(--confirmation-dialog-width, min(520px, 88vw));
+  max-width: var(--confirmation-dialog-width, min(520px, 88vw));
+  max-height: var(--confirmation-dialog-height, min(620px, 72dvh));
+  margin: 0;
+  padding: clamp(12px, 2.8vmin, 22px);
+  overflow: auto;
+  box-sizing: border-box;
+  transform: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  background: linear-gradient(155deg, rgba(35, 71, 59, 0.985), rgba(18, 43, 35, 0.995));
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.explanation-overlay[data-mode="confirmation"] .confirmation-symbol {
+  width: clamp(42px, 9vmin, 70px);
+  height: clamp(42px, 9vmin, 70px);
+  margin-bottom: clamp(7px, 1.6vmin, 12px);
+}
+
+.explanation-overlay[data-mode="confirmation"] .explanation-kicker {
+  margin-bottom: 4px;
+}
+
+.explanation-overlay[data-mode="confirmation"] .explanation-answer {
+  margin-bottom: 8px;
+  padding-bottom: 7px;
+  font-size: clamp(1.08rem, 3.4vmin, 1.7rem);
+}
+
+.explanation-overlay[data-mode="confirmation"] .explanation-text {
+  font-size: clamp(0.86rem, 2.25vmin, 1.08rem);
+  line-height: 1.58;
+}
+
+.explanation-overlay[data-mode="confirmation"][data-layout="vertical-portable"][data-portable-rotated="true"] {
+  overflow: hidden;
+  padding: 0;
+}
+
+.explanation-overlay[data-mode="confirmation"][data-layout="vertical-portable"][data-portable-rotated="true"] .explanation-dialog {
+  position: fixed;
+  top: var(--confirmation-dialog-center-y, 50%);
+  left: var(--confirmation-dialog-center-x, 50%);
+  width: var(--confirmation-dialog-rotated-width, min(520px, 72dvh));
+  max-width: var(--confirmation-dialog-rotated-width, min(520px, 72dvh));
+  max-height: var(--confirmation-dialog-rotated-height, min(620px, 82vw));
+  transform: translate(-50%, -50%) rotate(90deg);
+  transform-origin: center center;
+}
+
 </style>
     <script id="digicanji-quiz-data" type="application/json">
 {
-  "quizId": "todofuken-v2.0.1",
+  "quizId": "todofuken-v2.0.3",
   "title": "４７都道府県",
   "questions": [
     {
@@ -3944,6 +4017,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const scoreSummary = document.querySelector("#score-summary");
   const retryButton = document.querySelector("#retry-button");
   const explanationOverlay = document.querySelector("#explanation-overlay");
+  const explanationDialog = explanationOverlay.querySelector(".explanation-dialog");
   const confirmationSymbol = document.querySelector("#confirmation-symbol");
   const explanationKicker = explanationOverlay.querySelector(".explanation-kicker");
   const explanationTitle = document.querySelector("#explanation-title");
@@ -4637,6 +4711,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     lastRecognitionReplayReport: null,
     recognitionModeOverride: "",
     recognitionResponseKindOverride: "",
+    recognitionExpectedTextOverride: "",
     isRecognitionReplay: false,
     lastLoggedRecognitionFingerprint: "",
     lastCandidateEvaluation: null,
@@ -4751,8 +4826,14 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   }
 
   function getExpectedActiveAnswerCharacter() {
+    if (isFreeMode()) {
+      return "";
+    }
+    if (state.recognitionExpectedTextOverride) {
+      return Array.from(String(state.recognitionExpectedTextOverride))[0] || "";
+    }
     const item = state.session[state.currentQuestionIndex];
-    if (!item || isFreeMode()) {
+    if (!item) {
       return "";
     }
     return Array.from(String(item.question?.answer || ""))[state.activeSlotIndex] || "";
@@ -5447,6 +5528,46 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     explanationOverlay.dataset.layout = state.settings.layout;
     explanationOverlay.dataset.handedness = state.settings.handedness;
     explanationOverlay.dataset.portableRotated = isPortableRotationActive() ? "true" : "false";
+    if (explanationOverlay.dataset.mode === "confirmation" && !explanationOverlay.hidden) {
+      syncConfirmationFeedbackPosition();
+    }
+  }
+
+  function syncConfirmationFeedbackPosition() {
+    if (
+      explanationOverlay.hidden ||
+      explanationOverlay.dataset.mode !== "confirmation" ||
+      !explanationDialog ||
+      !padStage
+    ) {
+      return;
+    }
+
+    const padRect = padStage.getBoundingClientRect();
+    const viewport = window.visualViewport;
+    const viewportLeft = viewport?.offsetLeft || 0;
+    const viewportTop = viewport?.offsetTop || 0;
+    const viewportRight = viewportLeft + (viewport?.width || window.innerWidth);
+    const viewportBottom = viewportTop + (viewport?.height || window.innerHeight);
+    const visibleLeft = Math.max(viewportLeft, padRect.left);
+    const visibleTop = Math.max(viewportTop, padRect.top);
+    const visibleRight = Math.min(viewportRight, padRect.right);
+    const visibleBottom = Math.min(viewportBottom, padRect.bottom);
+    const visibleWidth = Math.max(0, visibleRight - visibleLeft);
+    const visibleHeight = Math.max(0, visibleBottom - visibleTop);
+    const margin = Math.max(5, Math.min(12, Math.min(visibleWidth, visibleHeight) * 0.025));
+    const innerWidth = Math.max(120, visibleWidth - margin * 2);
+    const innerHeight = Math.max(96, visibleHeight - margin * 2);
+
+    explanationOverlay.style.setProperty("--confirmation-dialog-left", `${visibleLeft + margin}px`);
+    explanationOverlay.style.setProperty("--confirmation-dialog-top", `${visibleTop + margin}px`);
+    explanationOverlay.style.setProperty("--confirmation-dialog-width", `${innerWidth}px`);
+    explanationOverlay.style.setProperty("--confirmation-dialog-height", `${innerHeight}px`);
+    explanationOverlay.style.setProperty("--confirmation-dialog-center-x", `${visibleLeft + visibleWidth / 2}px`);
+    explanationOverlay.style.setProperty("--confirmation-dialog-center-y", `${visibleTop + visibleHeight / 2}px`);
+    // 90度回転後の見た目を pad-stage に収めるため、回転前の幅と高さを入れ替える。
+    explanationOverlay.style.setProperty("--confirmation-dialog-rotated-width", `${innerHeight}px`);
+    explanationOverlay.style.setProperty("--confirmation-dialog-rotated-height", `${innerWidth}px`);
   }
 
   let resultFitFrame = 0;
@@ -7329,11 +7450,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return variants;
   }
 
-  function compareGlyphAgainstInkVariants(glyph, strokes = state.strokes) {
+  function compareGlyphAgainstInkVariantSet(glyph, strokes = state.strokes) {
     if (!glyph) {
-      return null;
+      return [];
     }
-    const comparisons = getCurrentInkGlyphShapeVariants(strokes)
+    return getCurrentInkGlyphShapeVariants(strokes)
       .map((variant) => {
         const comparison = compareGlyphShapeModels(variant.model, glyph);
         return comparison
@@ -7342,7 +7463,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       })
       .filter(Boolean)
       .sort((a, b) => a.adjustedScore - b.adjustedScore);
-    return comparisons[0] || null;
+  }
+
+  function compareGlyphAgainstInkVariants(glyph, strokes = state.strokes) {
+    return compareGlyphAgainstInkVariantSet(glyph, strokes)[0] || null;
   }
 
   function getCandidateGlyphShapeModel(text) {
@@ -7816,6 +7940,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     const previousStrokes = state.strokes;
     const previousModeOverride = state.recognitionModeOverride;
     const previousResponseKindOverride = state.recognitionResponseKindOverride;
+    const previousExpectedTextOverride = state.recognitionExpectedTextOverride;
     const previousReplayState = state.isRecognitionReplay;
     const results = [];
 
@@ -7829,6 +7954,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         state.recognitionResponseKindOverride = record?.question?.responseKind || (
           isHiraganaOnlyText(getReplayExpectedText(record)) ? "reading" : "writing"
         );
+        state.recognitionExpectedTextOverride = getReplayExpectedText(record);
         const sourceGroups = getReplaySourceGroups(record);
         const strokeStats = record?.strokeStats &&
           Number.isFinite(record.strokeStats.rawCount) &&
@@ -7879,6 +8005,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       state.strokes = previousStrokes;
       state.recognitionModeOverride = previousModeOverride;
       state.recognitionResponseKindOverride = previousResponseKindOverride;
+      state.recognitionExpectedTextOverride = previousExpectedTextOverride;
       state.isRecognitionReplay = previousReplayState;
     }
 
@@ -7961,6 +8088,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function runRecognitionSelfTests() {
     const cases = [];
+    // 診断用の人工筆跡に、実際の出題中の正解文字を混入させない。
+    // 正解候補の一般回復を検証するケースだけが、この値を一時的に上書きする。
+    const selfTestPreviousExpectedTextOverride = state.recognitionExpectedTextOverride;
+    state.recognitionExpectedTextOverride = "∅";
     const add = (name, pass, details = null) => {
       cases.push({ name, pass: Boolean(pass), details });
     };
@@ -8471,6 +8602,100 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           range: getCandidateStrokeCountRange(char),
         })),
       );
+      const targetAwarePreviousStrokes = state.strokes;
+      const targetAwarePreviousExpected = state.recognitionExpectedTextOverride;
+      try {
+        state.recognitionExpectedTextOverride = "自";
+        state.strokes = [
+          [{ x: 50, y: 5 }, { x: 43, y: 18 }],
+          [{ x: 22, y: 22 }, { x: 22, y: 95 }],
+          [{ x: 25, y: 22 }, { x: 80, y: 22 }, { x: 80, y: 95 }],
+          [{ x: 24, y: 45 }, { x: 78, y: 45 }],
+          [{ x: 24, y: 66 }, { x: 78, y: 66 }],
+          [{ x: 24, y: 94 }, { x: 80, y: 94 }],
+        ];
+        const jiStats = { rawCount: 6, virtualCount: 6 };
+        const jiEvidence = buildCandidateEvidence([
+          { source: "google", variant: "raw", candidates: ["好", "年"] },
+        ], jiStats);
+        const jiEnsemble = evaluateCandidateEnsemble([
+          { source: "google", variant: "raw", candidates: ["好", "年"] },
+        ], jiStats);
+        add(
+          "generic-target-aware-recovery-restores-ji-without-character-rule",
+          jiEvidence.has("自") &&
+            jiEnsemble.text === "自" &&
+            jiEnsemble.accepted.some((item) =>
+              item.text === "自" && item.memberships.some((membership) =>
+                membership.targetAwareRecovery
+              )
+            ),
+          { evidence: Array.from(jiEvidence.keys()), ensemble: jiEnsemble },
+        );
+
+        state.recognitionExpectedTextOverride = "合";
+        state.strokes = [
+          [{ x: 50, y: 8 }, { x: 18, y: 34 }],
+          [{ x: 50, y: 8 }, { x: 84, y: 34 }],
+          [{ x: 25, y: 43 }, { x: 76, y: 43 }],
+          [{ x: 32, y: 57 }, { x: 32, y: 90 }],
+          [{ x: 34, y: 57 }, { x: 73, y: 57 }, { x: 73, y: 90 }],
+          [{ x: 33, y: 90 }, { x: 73, y: 90 }],
+        ];
+        const goStats = { rawCount: 6, virtualCount: 6 };
+        const goEvidence = buildCandidateEvidence([
+          { source: "google", variant: "raw", candidates: ["同", "向", "年"] },
+        ], goStats);
+        const goEnsemble = evaluateCandidateEnsemble([
+          { source: "google", variant: "raw", candidates: ["同", "向", "年"] },
+        ], goStats);
+        add(
+          "generic-target-aware-recovery-restores-go-without-character-rule",
+          goEvidence.has("合") &&
+            goEnsemble.text === "合" &&
+            goEnsemble.accepted.some((item) =>
+              item.text === "合" && item.memberships.some((membership) =>
+                membership.targetAwareRecovery
+              )
+            ),
+          { evidence: Array.from(goEvidence.keys()), ensemble: goEnsemble },
+        );
+
+        // 回復本体が自・合を名指しせず、正解文字と共通検証だけで動くことを確認する。
+        // フォント差で字形モデルを生成できない文字もあるため、ここでは実装境界を検査する。
+        const targetAwareImplementation = getTargetAwareGlyphRecoveryDecision.toString();
+        add(
+          "target-aware-recovery-is-generic-beyond-former-special-cases",
+          !targetAwareImplementation.includes('"自"') &&
+            !targetAwareImplementation.includes('"合"') &&
+            targetAwareImplementation.includes("getExpectedActiveAnswerCharacter") &&
+            targetAwareImplementation.includes("getCandidateStrokeCountRange") &&
+            targetAwareImplementation.includes("compareGlyphAgainstInkVariantSet"),
+          targetAwareImplementation,
+        );
+
+        // 字形が近くても標準画数に届かない入力は、正解候補を挿入しない。
+        state.recognitionExpectedTextOverride = "自";
+        state.strokes = [
+          [{ x: 50, y: 5 }, { x: 43, y: 18 }],
+          [{ x: 22, y: 22 }, { x: 22, y: 95 }],
+          [{ x: 25, y: 22 }, { x: 80, y: 22 }, { x: 80, y: 95 }],
+          [{ x: 24, y: 45 }, { x: 78, y: 45 }],
+          [{ x: 24, y: 66 }, { x: 78, y: 66 }],
+        ];
+        const incompleteJiEvidence = buildCandidateEvidence([], {
+          rawCount: 5,
+          virtualCount: 5,
+        });
+        add(
+          "target-aware-recovery-keeps-exact-stroke-count-boundary",
+          !incompleteJiEvidence.has("自"),
+          Array.from(incompleteJiEvidence.keys()),
+        );
+      } finally {
+        state.strokes = targetAwarePreviousStrokes;
+        state.recognitionExpectedTextOverride = targetAwarePreviousExpected;
+      }
       const riTrajectoryStrokes = [
         [{ x: 34, y: 20, t: 0 }, { x: 30, y: 60, t: 30 }],
         [{ x: 66, y: 18, t: 50 }, { x: 62, y: 92, t: 100 }],
@@ -9303,6 +9528,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       EDUCATIONAL_FONT_CANDIDATES,
     );
 
+    state.recognitionExpectedTextOverride = selfTestPreviousExpectedTextOverride;
     return {
       pass: cases.every((item) => item.pass),
       cases,
@@ -11416,6 +11642,131 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return isStrokeCompatible(rule.target, strokeStats);
   }
 
+  function getTargetAwareGlyphRecoveryDecision(
+    text,
+    strokeStats = estimateInputStrokeStats(),
+    compatibility = null,
+    strokes = state.strokes,
+  ) {
+    if (isFreeMode() || isReadingResponse()) {
+      return null;
+    }
+    const normalizedText = normalizeCandidateText(text);
+    const expectedText = normalizeCandidateText(getExpectedActiveAnswerCharacter());
+    if (
+      !expectedText ||
+      normalizedText !== expectedText ||
+      getCharacterLength(normalizedText) !== 1 ||
+      !isCjkIdeograph(normalizedText)
+    ) {
+      return null;
+    }
+
+    const rawCount = Number(strokeStats?.rawCount);
+    const virtualCount = Number(strokeStats?.virtualCount);
+    const range = getCandidateStrokeCountRange(normalizedText);
+    if (
+      !range ||
+      !Number.isFinite(rawCount) ||
+      !Number.isFinite(virtualCount) ||
+      rawCount < range.min ||
+      rawCount > range.max ||
+      virtualCount < range.min ||
+      virtualCount > range.max
+    ) {
+      return null;
+    }
+
+    const base = compatibility || evaluateStrokeCompatibility(normalizedText, strokeStats);
+    const reasons = Array.isArray(base?.reasons) ? base.reasons : [];
+    const nonGlyphReasons = reasons.filter((reason) => reason !== "glyph-shape-mismatch");
+    if (!base?.pass && (nonGlyphReasons.length > 0 || !reasons.includes("glyph-shape-mismatch"))) {
+      return null;
+    }
+    if (base?.glyphShape?.displacedStroke?.hardReject) {
+      return null;
+    }
+
+    const glyph = getCandidateGlyphShapeModel(normalizedText);
+    const comparisons = compareGlyphAgainstInkVariantSet(glyph, strokes);
+    if (comparisons.length < 2) {
+      return null;
+    }
+
+    // 文字別の例外表は持たず、同じ筆跡を「全体」「縦横比補正」「端点除去」で
+    // 独立に比較する。1つの変形だけが偶然近い場合は救済しない。
+    const scoreLimit = rawCount <= 5 ? 0.33 : rawCount <= 9 ? 0.38 : 0.42;
+    const supported = comparisons.filter((comparison) => (
+      comparison.adjustedScore <= scoreLimit &&
+      comparison.inkCoverage >= 0.16 &&
+      comparison.glyphCoverage >= 0.14 &&
+      comparison.coarseDifference <= 0.34 &&
+      comparison.projectionDifference <= 0.25 &&
+      comparison.orientationDifference <= 0.86 &&
+      comparison.componentCountDifference <= 0.86
+    ));
+    const requiredSupport = Math.min(2, comparisons.length);
+    if (supported.length < requiredSupport) {
+      return null;
+    }
+    const supportMean = supported
+      .slice(0, requiredSupport)
+      .reduce((sum, comparison) => sum + comparison.adjustedScore, 0) / requiredSupport;
+    if (supportMean > scoreLimit + 0.012) {
+      return null;
+    }
+
+    const best = supported[0];
+    const glyphPenaltyCap = rawCount <= 5 ? 0.46 : rawCount <= 9 ? 0.54 : 0.62;
+    return {
+      target: normalizedText,
+      sourcePenalty: -0.16,
+      glyphPenaltyCap,
+      supportCount: supported.length,
+      variantCount: comparisons.length,
+      supportMean,
+      best,
+    };
+  }
+
+  function evaluateStrokeCompatibilityForMembership(text, strokeStats, membership) {
+    const compatibility = evaluateStrokeCompatibility(text, strokeStats);
+    if (!membership?.targetAwareRecovery) {
+      return compatibility;
+    }
+
+    const decision = getTargetAwareGlyphRecoveryDecision(text, strokeStats, compatibility);
+    if (!decision) {
+      return compatibility;
+    }
+
+    const originalGlyphPenalty = Number.isFinite(compatibility.glyphShape.penalty)
+      ? compatibility.glyphShape.penalty
+      : 0;
+    const recoveredGlyphPenalty = Math.min(originalGlyphPenalty, decision.glyphPenaltyCap);
+    return {
+      ...compatibility,
+      pass: true,
+      reasons: [],
+      warnings: [
+        ...(compatibility.warnings || []),
+        "target-aware-glyph-consensus-recovery",
+      ],
+      scorePenalty: Math.max(
+        0,
+        compatibility.scorePenalty - originalGlyphPenalty + recoveredGlyphPenalty,
+      ),
+      glyphShape: {
+        ...compatibility.glyphShape,
+        hardReject: false,
+        penalty: recoveredGlyphPenalty,
+        targetAwareRecovery: true,
+        recoverySupportCount: decision.supportCount,
+        recoveryVariantCount: decision.variantCount,
+      },
+    };
+  }
+
   function expandStructuralAlternatives(candidates, strokeStats) {
     const expanded = [];
     const seen = new Set();
@@ -11954,7 +12305,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       }
     });
     scored.sort((a, b) => a.score - b.score || a.char.localeCompare(b.char, "ja"));
-    return scored.slice(0, LOCAL_HAN_FALLBACK_LIMIT).map((item) => item.char);
+    return normalizeCandidates(scored.map((item) => item.char))
+      .slice(0, LOCAL_HAN_FALLBACK_LIMIT);
   }
 
   function getAcceptedSourceGroupLeader(evaluation, source, variant) {
@@ -12269,7 +12621,8 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       evidence.get(text).push(membership);
     }
 
-    normalizeCandidateSourceGroups(sourceGroups).forEach((group) => {
+    const normalizedGroups = normalizeCandidateSourceGroups(sourceGroups);
+    normalizedGroups.forEach((group) => {
       const effectiveStrokeStats = group.strokeStats || strokeStats;
       group.candidates.forEach((candidate, rank) => {
         STRUCTURAL_ALTERNATIVE_RULES.forEach((rule) => {
@@ -12323,6 +12676,24 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         });
       });
     });
+
+    // 外部認識器から正解候補が落ちた場合だけ、問題文の正解文字を字形照合する。
+    // 画数・既存の部首/対照構造・複数字形比較を通過した候補を再挿入するだけで、
+    // 正解文字を無条件に確定する処理ではない。文字別の救済表も持たない。
+    const expectedTarget = normalizeCandidateText(getExpectedActiveAnswerCharacter());
+    const recovery = getTargetAwareGlyphRecoveryDecision(expectedTarget, strokeStats);
+    if (recovery) {
+      add(expectedTarget, {
+        source: "target-aware",
+        variant: "expected-glyph-consensus",
+        rank: 0,
+        penalty: recovery.sourcePenalty,
+        alternativeOf: "",
+        targetAwareRecovery: true,
+        strokeStats,
+        transform: null,
+      });
+    }
 
     return evidence;
   }
@@ -12384,7 +12755,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const membershipCompatibility = reasons.length === 0
         ? memberships.map((membership) => {
             const effectiveStrokeStats = membership.strokeStats || strokeStats;
-            const compatibility = evaluateStrokeCompatibility(text, effectiveStrokeStats);
+            const compatibility = evaluateStrokeCompatibilityForMembership(
+              text,
+              effectiveStrokeStats,
+              membership,
+            );
             return {
               membership,
               strokeStats: effectiveStrokeStats,
@@ -14057,9 +14432,12 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     confirmationSymbol.className = `confirmation-symbol ${item.isCorrect ? "is-correct-symbol" : "is-incorrect-symbol"}`;
     explanationTitle.textContent = `正解：${item.question.answer}`;
     explanationText.textContent = item.question.explanation;
-    syncExplanationLayout();
     explanationOverlay.hidden = false;
-    window.requestAnimationFrame(() => confirmationSymbol.classList.add("is-visible"));
+    syncExplanationLayout();
+    window.requestAnimationFrame(() => {
+      syncConfirmationFeedbackPosition();
+      confirmationSymbol.classList.add("is-visible");
+    });
   }
 
   async function handleConfirmCurrent() {
