@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>２～準１</title>
-    <meta name="application-version" content="2.0.4" />
+    <meta name="application-version" content="2.0.5" />
     <style>
 :root {
   color-scheme: dark;
@@ -2486,6 +2486,10 @@ input:focus-visible,
 }
 
 /*
+ * v2.0.5: Unicode の Script=Han と、日本語で語中に使われる反復・略記記号を
+ * エディター／プレイヤーで同じ文字種として扱う。々・〇・〻や補助漢字面を
+ * 範囲指定から漏らさず、〆など Script=Han 外の日本語記号も候補経路へ通す。
+ * 認識順位・字体閾値は v2.0.4 から変更しない。
  * v2.0.4: v2.0.3 の正解文字を候補へ再注入する汎用回復を撤回し、
  * 認識順位・候補選択・字体判定を93点評価の v2.0.2 と同一内容へ復元した。
  * v2.0.2: 確定直後は認識枠を比較できる状態のまま、解説だけを手書き欄へ重ねる。
@@ -3925,9 +3929,9 @@ input:focus-visible,
     },
     {
       "front": "堂々とした威風",
-      "prompt": "堂々",
+      "prompt": "ドウドウ",
       "back": "の行進だった。",
-      "answer": "どうどう",
+      "answer": "堂々",
       "explanation": "「威風堂々」は、威厳があり立派な様子を表します。同じ「堂」を二度書く熟語です。"
     },
     {
@@ -4744,9 +4748,9 @@ input:focus-visible,
     },
     {
       "front": "白い花が",
-      "prompt": "楚々",
+      "prompt": "ソソ",
       "back": "と咲いている。",
-      "answer": "そそ",
+      "answer": "楚々",
       "explanation": "「楚々」は、清らかで可憐な様子です。同じ字を重ねて「そそ」と読みます。"
     },
     {
@@ -5248,9 +5252,9 @@ input:focus-visible,
     },
     {
       "front": "機会をねらって鋭く見つめる虎視",
-      "prompt": "眈々",
+      "prompt": "タンタン",
       "back": "の構えだ。",
-      "answer": "たんたん",
+      "answer": "眈々",
       "explanation": "「虎視眈々」は、虎が獲物をねらうように、機会をじっと狙っている様子です。「眈」は見つめる意です。"
     },
     {
@@ -5311,9 +5315,9 @@ input:focus-visible,
     },
     {
       "front": "時間には余裕",
-      "prompt": "綽々",
+      "prompt": "シャクシャク",
       "back": "を持って行動する。",
-      "answer": "しゃくしゃく",
+      "answer": "綽々",
       "explanation": "「余裕綽々」は、十分な余裕があり、落ち着いている様子です。「綽」はゆったりしている意味です。"
     },
     {
@@ -5360,9 +5364,9 @@ input:focus-visible,
     },
     {
       "front": "会場は和気",
-      "prompt": "藹々",
+      "prompt": "アイアイ",
       "back": "とした雰囲気だった。",
-      "answer": "あいあい",
+      "answer": "藹々",
       "explanation": "「和気藹々」は、和やかな気分が満ち、人々が仲よく打ち解けている様子です。「藹」は穏やかで和らいだ意味です。"
     },
     {
@@ -6357,6 +6361,13 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     "鱸": 27,
     "阨": 7,
   });
+
+  // Unicode 上で Han / Hiragana / Katakana に属さないが、日本語の語中・表記で
+  // 1文字として扱う必要がある記号。Han 扱いになる 々・〇・〻はここへ重複登録せず、
+  // Script プロパティ側で一括して扱う。縦組み用のかな反復記号も旧資料対応として含む。
+  const JAPANESE_SPECIAL_WRITING_MARKS = Object.freeze(new Set(
+    Array.from("〆〼〱〲〳〴〵ヽヾ"),
+  ));
 
   // 活字輪郭から得た画数ではなく、学校で扱う標準的な手書きの筆の上げ下げを使う。
   // 一部のひらがなだけを例外処理するのではなく、基本字・小書き字を一式定義し、
@@ -10361,6 +10372,32 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       Object.fromEntries(Object.keys(commonKanaCounts).map((char) => [char, getKanaStrokeProfile(char)])),
     );
 
+    const japaneseWritingCoverage = [
+      "々", "〇", "〻", "〆", "〼", "〱", "〲", "〳", "〴", "〵",
+      "ゝ", "ゞ", "ヽ", "ヾ", "ヶ", "ヵ", "ー",
+    ];
+    add(
+      "japanese-writing-marks-are-recognition-candidates",
+      japaneseWritingCoverage.every((char) => isJapaneseCandidate(char)),
+      Object.fromEntries(japaneseWritingCoverage.map((char) => [char, isJapaneseCandidate(char)])),
+    );
+    add(
+      "ideographic-iteration-and-zero-use-han-path",
+      isCjkIdeograph("々") && isCjkIdeograph("〇") && isCjkIdeograph("〻") &&
+        getCandidateStrokeCount("々") === 3 && getCandidateStrokeCount("〇") === 1,
+      {
+        iteration: { han: isCjkIdeograph("々"), strokes: getCandidateStrokeCount("々") },
+        zero: { han: isCjkIdeograph("〇"), strokes: getCandidateStrokeCount("〇") },
+        verticalIteration: { han: isCjkIdeograph("〻"), strokes: getCandidateStrokeCount("〻") },
+      },
+    );
+    add(
+      "special-japanese-writing-mark-set-is-narrow",
+      ["〆", "〼", "〱", "〲", "〳", "〴", "〵", "ヽ", "ヾ"].every(isJapaneseSpecialWritingMark) &&
+        !isJapaneseSpecialWritingMark("、") && !isJapaneseSpecialWritingMark("。"),
+      Array.from(JAPANESE_SPECIAL_WRITING_MARKS),
+    );
+
     const shi = getKanaStrokeProfile("し");
     const ji = getKanaStrokeProfile("じ");
     add(
@@ -12010,6 +12047,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return /^\p{Script=Han}$/u.test(String(char || ""));
   }
 
+  function isJapaneseSpecialWritingMark(char) {
+    return JAPANESE_SPECIAL_WRITING_MARKS.has(String(char || ""));
+  }
+
   function hasUnknownKanjiStrokeCount(text) {
     return Array.from(text).some((char) => {
       return isCjkIdeograph(char) && !Number.isFinite(getCharStrokeCount(char));
@@ -12022,9 +12063,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
   function isJapaneseCandidate(text) {
     const value = String(text || "");
-    return (
-      /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(value) &&
-      /^[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}々〆〤ヶヵー]+$/u.test(value)
+    return Boolean(
+      value &&
+      /^[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}〆〼〱〲〳〴〵ー]+$/u.test(value)
     );
   }
 
@@ -13851,8 +13892,11 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       const isSingleHan = !isFreeMode() &&
         getCharacterLength(text) === 1 &&
         isCjkIdeograph(text);
+      const isSingleJapaneseMark = !isFreeMode() &&
+        getCharacterLength(text) === 1 &&
+        isJapaneseSpecialWritingMark(text);
       result.pass = Boolean(
-        isSingleHan &&
+        (isSingleHan || isSingleJapaneseMark) &&
         strokeStats.rawCount >= 1 &&
         strokeStats.virtualCount >= 1 &&
         result.structure.pass &&
@@ -13864,7 +13908,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           (id) => `contrastive:${id}`,
         ));
       }
-      result.unknownStrokeCount = isSingleHan;
+      result.unknownStrokeCount = isSingleHan || isSingleJapaneseMark;
       if (result.pass) {
         result.warnings.push("unknown-stroke-count");
         result.scorePenalty += UNKNOWN_HAN_STROKE_PENALTY;
