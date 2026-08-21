@@ -8,7 +8,7 @@
     />
     <meta name="theme-color" content="#17251f" />
     <title>４７都道府県</title>
-    <meta name="application-version" content="2.0.6" />
+    <meta name="application-version" content="2.0.7" />
     <style>
 :root {
   color-scheme: dark;
@@ -2322,6 +2322,7 @@ input:focus-visible,
 /* v1.25.0: prototype-compatible external Han ordering with bounded font-shape influence */
 /* v2.0.1: explicit no-candidate symbol and recognition-safe answer finalization */
 /* v2.0.6: conservative multi-stroke contradiction gate and no-candidate core confirmation */
+/* v2.0.7: verified 礼/直 structure recovery without global threshold or rank changes */
 .result-box,
 .review-menu,
 .result-list {
@@ -4247,6 +4248,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   ]);
   const RECOGNITION_DEBUG_QUERY = new URLSearchParams(window.location.search).get("recognitionDebug");
   const RECOGNITION_DIAGNOSTICS_ENABLED = RECOGNITION_DEBUG_QUERY === "1" || RECOGNITION_DEBUG_QUERY === "true";
+  const RECOGNITION_SELF_TEST_ENABLED = new URLSearchParams(window.location.search).get("selfTest") === "1";
 
   const EDUCATIONAL_GLYPH_NORMALIZATION = Object.freeze({
     "來": "来",
@@ -4343,9 +4345,9 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     },
   ]);
 
-  // 「自」「合」は、教育字体の正しい6画でも端末フォントの輪郭との差が大きく、
-  // 字形ラスタ比較だけが hard reject になる端末がある。全体の許容値は動かさず、
-  // 画数・筆順・相対配置が文字固有の骨格を満たす場合だけ候補を復元する。
+  // 教育字体の正しい筆跡でも端末フォントの輪郭との差が大きく、字形ラスタ比較だけが
+  // hard reject になる文字がある。全体の許容値は動かさず、画数・筆順・相対配置が
+  // 文字固有の骨格を満たす場合だけ候補を復元する。
   const STRUCTURAL_GLYPH_RECOVERY_RULES = Object.freeze([
     Object.freeze({
       target: "自",
@@ -4360,6 +4362,20 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       test: hasLikelyGoStructure,
       penalty: -0.1,
       glyphPenaltyCap: 0.36,
+    }),
+    Object.freeze({
+      target: "礼",
+      sources: Object.freeze(["北"]),
+      test: hasLikelyReiStructure,
+      penalty: -0.08,
+      glyphPenaltyCap: 0.38,
+    }),
+    Object.freeze({
+      target: "直",
+      sources: Object.freeze(["宮", "倉"]),
+      test: hasLikelyChokuStructure,
+      penalty: -0.08,
+      glyphPenaltyCap: 0.38,
     }),
   ]);
 
@@ -8819,6 +8835,95 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       } finally {
         state.strokes = verifiedSixStrokePreviousStrokes;
       }
+      const verifiedReiChokuPreviousStrokes = state.strokes;
+      try {
+        state.strokes = [
+          [{ x: 25, y: 8 }, { x: 34, y: 18 }],
+          [{ x: 15, y: 30 }, { x: 49, y: 30 }, { x: 25, y: 59 }],
+          [{ x: 30, y: 43 }, { x: 30, y: 92 }],
+          [{ x: 35, y: 55 }, { x: 48, y: 67 }],
+          [{ x: 70, y: 17 }, { x: 70, y: 82 }, { x: 88, y: 82 }],
+        ];
+        const reiStats = { rawCount: 5, virtualCount: 5 };
+        const reiEvidence = buildCandidateEvidence([
+          { source: "google", variant: "raw", candidates: ["北"] },
+        ], reiStats);
+        const reiEnsemble = evaluateCandidateEnsemble([
+          { source: "google", variant: "raw", candidates: ["北"] },
+        ], reiStats);
+        add(
+          "verified-five-stroke-rei-recovers-from-kita-or-no-candidate",
+          hasLikelyReiStructure() &&
+            reiEvidence.has("礼") &&
+            reiEnsemble.text === "礼" &&
+            reiEnsemble.accepted.some((item) =>
+              item.text === "礼" && item.memberships.some((membership) =>
+                membership.structuralRecovery
+              )
+            ),
+          { evidence: Array.from(reiEvidence.keys()), ensemble: reiEnsemble },
+        );
+
+        state.strokes = [
+          [{ x: 14, y: 13 }, { x: 84, y: 13 }],
+          [{ x: 50, y: 5 }, { x: 50, y: 36 }],
+          [{ x: 25, y: 29 }, { x: 25, y: 84 }],
+          [{ x: 26, y: 30 }, { x: 76, y: 30 }, { x: 76, y: 84 }],
+          [{ x: 26, y: 47 }, { x: 75, y: 47 }],
+          [{ x: 26, y: 64 }, { x: 75, y: 64 }],
+          [{ x: 25, y: 83 }, { x: 76, y: 83 }],
+          [{ x: 9, y: 94 }, { x: 91, y: 94 }],
+        ];
+        const chokuStats = { rawCount: 8, virtualCount: 8 };
+        const chokuEvidence = buildCandidateEvidence([
+          { source: "google", variant: "raw", candidates: ["宮", "倉"] },
+        ], chokuStats);
+        const chokuEnsemble = evaluateCandidateEnsemble([
+          { source: "google", variant: "raw", candidates: ["宮", "倉"] },
+        ], chokuStats);
+        add(
+          "verified-eight-stroke-choku-recovers-from-miya-kura-or-no-candidate",
+          hasLikelyChokuStructure() &&
+            chokuEvidence.has("直") &&
+            chokuEnsemble.text === "直" &&
+            chokuEnsemble.accepted.some((item) =>
+              item.text === "直" && item.memberships.some((membership) =>
+                membership.structuralRecovery
+              )
+            ),
+          { evidence: Array.from(chokuEvidence.keys()), ensemble: chokuEnsemble },
+        );
+
+        state.strokes = Array.from({ length: 5 }, (_, index) => [
+          { x: 10, y: 12 + index * 18 },
+          { x: 90, y: 12 + index * 18 },
+        ]);
+        const unrelatedFiveEvidence = buildCandidateEvidence([], {
+          rawCount: 5,
+          virtualCount: 5,
+        });
+        add(
+          "five-stroke-recovery-does-not-inject-rei-for-unrelated-writing",
+          !hasLikelyReiStructure() && !unrelatedFiveEvidence.has("礼"),
+          Array.from(unrelatedFiveEvidence.keys()),
+        );
+
+        state.strokes = Array.from({ length: 8 }, (_, index) => [
+          { x: 10, y: 8 + index * 12 },
+          { x: 90, y: 8 + index * 12 },
+        ]);
+        const unrelatedEightEvidence = buildCandidateEvidence([], {
+          rawCount: 8,
+          virtualCount: 8,
+        });
+        add(
+          "eight-stroke-recovery-does-not-inject-choku-for-unrelated-writing",
+          !hasLikelyChokuStructure() && !unrelatedEightEvidence.has("直"),
+          Array.from(unrelatedEightEvidence.keys()),
+        );
+      } finally {
+        state.strokes = verifiedReiChokuPreviousStrokes;
+      }
       const riTrajectoryStrokes = [
         [{ x: 34, y: 20, t: 0 }, { x: 30, y: 60, t: 30 }],
         [{ x: 66, y: 18, t: 50 }, { x: 62, y: 92, t: 100 }],
@@ -9682,6 +9787,18 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     fitLayout: fitScreenLayout,
     runSelfTests: runRecognitionSelfTests,
   });
+
+  if (RECOGNITION_SELF_TEST_ENABLED) {
+    queueMicrotask(() => {
+      const report = runRecognitionSelfTests();
+      document.documentElement.dataset.digicanjiSelfTest = JSON.stringify({
+        pass: report.pass,
+        total: report.cases.length,
+        cases: report.cases.map((item) => ({ name: item.name, pass: item.pass })),
+        failed: report.cases.filter((item) => !item.pass),
+      });
+    });
+  }
 
   async function postGooglePayload(url, payload, contentType, signal) {
     const response = await fetch(url, {
@@ -11319,6 +11436,132 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       boxTopRightValid &&
       boxBottomValid &&
       boxEdgesAlign
+    );
+  }
+
+  function hasLikelyReiStructure() {
+    const bounds = getInkBounds();
+    const strokes = getMeaningfulStrokeGeometries();
+    if (!bounds || strokes.length !== 5) {
+      return false;
+    }
+
+    const [dot, foldedSweep, leftVertical, shortSweep, rightHook] = strokes;
+    const diagonal = Math.hypot(bounds.width, bounds.height);
+    const leftComponentBounds = getStrokeGroupBounds(0, 4);
+    if (!leftComponentBounds) {
+      return false;
+    }
+
+    const dotValid =
+      dot.length <= diagonal * 0.3 &&
+      dot.centerX <= bounds.left + bounds.width * 0.48 &&
+      dot.centerY <= bounds.top + bounds.height * 0.27;
+    const foldedSweepValid =
+      foldedSweep.width >= bounds.width * 0.24 &&
+      foldedSweep.height >= bounds.height * 0.16 &&
+      foldedSweep.top <= bounds.top + bounds.height * 0.38 &&
+      foldedSweep.bottom <= bounds.top + bounds.height * 0.7 &&
+      foldedSweep.end.x <= bounds.left + bounds.width * 0.47 &&
+      foldedSweep.end.y >= foldedSweep.top + bounds.height * 0.12;
+    const leftVerticalValid =
+      isMostlyVerticalStroke(leftVertical, bounds.height * 0.36) &&
+      leftVertical.centerX <= bounds.left + bounds.width * 0.46 &&
+      leftVertical.top <= bounds.top + bounds.height * 0.55 &&
+      leftVertical.bottom >= bounds.top + bounds.height * 0.78;
+    const shortSweepValid =
+      shortSweep.length <= diagonal * 0.34 &&
+      shortSweep.start.x <= bounds.left + bounds.width * 0.48 &&
+      shortSweep.end.x >= shortSweep.start.x + bounds.width * 0.06 &&
+      shortSweep.end.y >= shortSweep.start.y + bounds.height * 0.05 &&
+      shortSweep.centerY >= bounds.top + bounds.height * 0.42 &&
+      shortSweep.centerY <= bounds.top + bounds.height * 0.76;
+    const rightHookValid =
+      rightHook.height >= bounds.height * 0.55 &&
+      rightHook.width >= bounds.width * 0.055 &&
+      rightHook.start.y <= bounds.top + bounds.height * 0.32 &&
+      rightHook.bottom >= bounds.top + bounds.height * 0.82 &&
+      rightHook.centerX >= bounds.left + bounds.width * 0.66 &&
+      rightHook.end.x >= rightHook.start.x + bounds.width * 0.045 &&
+      rightHook.end.y >= rightHook.bottom - bounds.height * 0.12;
+    const asymmetricLayout =
+      leftComponentBounds.right <= bounds.left + bounds.width * 0.64 &&
+      rightHook.left >= leftVertical.centerX + bounds.width * 0.24;
+
+    return (
+      dotValid &&
+      foldedSweepValid &&
+      leftVerticalValid &&
+      shortSweepValid &&
+      rightHookValid &&
+      asymmetricLayout
+    );
+  }
+
+  function hasLikelyChokuStructure() {
+    const bounds = getInkBounds();
+    const strokes = getMeaningfulStrokeGeometries();
+    if (!bounds || strokes.length !== 8) {
+      return false;
+    }
+
+    const [topBar, centerVertical, leftSide, topAndRight, middle1, middle2, boxBottom, base] = strokes;
+    const topBarValid =
+      isMostlyHorizontalStroke(topBar, bounds.width * 0.55) &&
+      topBar.centerY <= bounds.top + bounds.height * 0.22;
+    const centerVerticalValid =
+      isMostlyVerticalStroke(centerVertical, bounds.height * 0.2) &&
+      centerVertical.centerX >= bounds.left + bounds.width * 0.3 &&
+      centerVertical.centerX <= bounds.left + bounds.width * 0.7 &&
+      centerVertical.top <= topBar.centerY + bounds.height * 0.08 &&
+      centerVertical.bottom >= topBar.centerY + bounds.height * 0.18 &&
+      centerVertical.centerX >= topBar.left - bounds.width * 0.05 &&
+      centerVertical.centerX <= topBar.right + bounds.width * 0.05;
+    const leftSideValid =
+      isMostlyVerticalStroke(leftSide, bounds.height * 0.42) &&
+      leftSide.centerX <= bounds.left + bounds.width * 0.42 &&
+      leftSide.top >= bounds.top + bounds.height * 0.16 &&
+      leftSide.top <= bounds.top + bounds.height * 0.48 &&
+      leftSide.bottom >= bounds.top + bounds.height * 0.72;
+    const topAndRightValid =
+      topAndRight.width >= bounds.width * 0.34 &&
+      topAndRight.height >= bounds.height * 0.4 &&
+      topAndRight.top >= bounds.top + bounds.height * 0.16 &&
+      topAndRight.top <= bounds.top + bounds.height * 0.48 &&
+      topAndRight.right >= bounds.left + bounds.width * 0.68 &&
+      topAndRight.bottom >= bounds.top + bounds.height * 0.72;
+    const rows = [middle1, middle2, boxBottom];
+    const rowsValid = rows.every((stroke) =>
+      isMostlyHorizontalStroke(stroke, bounds.width * 0.34) &&
+      stroke.left <= leftSide.centerX + bounds.width * 0.16 &&
+      stroke.right >= topAndRight.right - bounds.width * 0.18
+    );
+    const rowsOrdered =
+      middle1.centerY >= bounds.top + bounds.height * 0.34 &&
+      middle1.centerY < middle2.centerY - bounds.height * 0.08 &&
+      middle2.centerY < boxBottom.centerY - bounds.height * 0.08 &&
+      boxBottom.centerY >= bounds.top + bounds.height * 0.68 &&
+      boxBottom.centerY <= bounds.top + bounds.height * 0.9;
+    const baseValid =
+      isMostlyHorizontalStroke(base, bounds.width * 0.68) &&
+      base.centerY >= bounds.top + bounds.height * 0.86 &&
+      base.left <= leftSide.centerX - bounds.width * 0.08 &&
+      base.right >= topAndRight.right + bounds.width * 0.08 &&
+      base.length >= topBar.length * 0.82;
+    const boxAligned =
+      Math.abs(leftSide.top - topAndRight.top) <= bounds.height * 0.18 &&
+      Math.abs(leftSide.bottom - topAndRight.bottom) <= bounds.height * 0.18 &&
+      topAndRight.left <= leftSide.centerX + bounds.width * 0.16;
+
+    return (
+      topBarValid &&
+      centerVerticalValid &&
+      leftSideValid &&
+      topAndRightValid &&
+      rowsValid &&
+      rowsOrdered &&
+      baseValid &&
+      boxAligned
     );
   }
 
