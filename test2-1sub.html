@@ -7,8 +7,8 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <meta name="theme-color" content="#17251f" />
-    <title>２～準１</title>
-    <meta name="application-version" content="2.0.5" />
+    <title>２、準１</title>
+    <meta name="application-version" content="2.0.6" />
     <style>
 :root {
   color-scheme: dark;
@@ -2321,6 +2321,7 @@ input:focus-visible,
 /* v1.24.1: distinguish Saka's crossed Mata component from the Yaku glyph */
 /* v1.25.0: prototype-compatible external Han ordering with bounded font-shape influence */
 /* v2.0.1: explicit no-candidate symbol and recognition-safe answer finalization */
+/* v2.0.6: conservative multi-stroke contradiction gate and no-candidate core confirmation */
 .result-box,
 .review-menu,
 .result-list {
@@ -2566,8 +2567,8 @@ input:focus-visible,
 </style>
     <script id="digicanji-quiz-data" type="application/json">
 {
-  "quizId": "kanken2-jun1",
-  "title": "２～準１",
+  "quizId": "2-1sub-v2.0.6",
+  "title": "２、準１",
   "questions": [
     {
       "front": "初対面の相手と丁寧に",
@@ -6076,7 +6077,7 @@ input:focus-visible,
   <body>
     <main id="app" class="app" data-layout="horizontal" data-handedness="right" aria-labelledby="app-title">
       <header class="app-header">
-        <h1 id="app-title" class="app-title">２～準１</h1>
+        <h1 id="app-title" class="app-title">２、準１</h1>
         <div class="progress-wrap" aria-live="polite">
           <span id="progress-text" class="progress-text">1 / 1</span>
           <span class="progress-track" aria-hidden="true"><span id="progress-bar" class="progress-bar"></span></span>
@@ -6420,6 +6421,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
   const HAN_CONSENSUS_CONFIRM_GLYPH_SCORE = 0.2;
   const HAN_CONSENSUS_CONFIRM_MARGIN = 1.35;
   const RECOGNITION_CONFIRMATION_ENDPOINT_TRIM_RATIO = 0.045;
+  const DISPLACED_STROKE_SUSPICIOUS_MIN_COUNT = 2;
+  const DISPLACED_STROKE_MULTI_MIN_PHYSICAL_STROKES = 7;
+  const DISPLACED_STROKE_SUSPICIOUS_MIN_COMBINED_RATIO = 0.13;
+  const DISPLACED_STROKE_HARD_MIN_COMBINED_RATIO = 0.18;
   const GLYPH_ENDPOINT_TRIM_RATIO = 0.065;
   const GLYPH_PROPORTION_NORMALIZATION_BLEND = 0.42;
   const GLYPH_PROPORTION_VARIANT_PENALTY = 0.016;
@@ -9837,17 +9842,52 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
 
     suspects.sort((a, b) => b.severity - a.severity);
     const strongest = suspects[0] || null;
-    const hardReject = Boolean(
+
+    // 同画数の別字が外部認識器の先頭に来た場合、1本だけの局所差ではなく、
+    // 「複数の実画が候補字形のどこにも十分対応しない」ことを強い矛盾として扱う。
+    // 1〜6画の字は活字体との接触差が大きいため対象外とし、7画以上かつ
+    // 複数の長い画が同時に外れる場合だけ発火させる。
+    const displacedSubstantial = suspects.filter((item) =>
+      item.lengthRatio >= 0.035 &&
+      item.coverage < 0.44 &&
+      item.meanDistance > 0.058
+    );
+    const displacedCombinedRatio = displacedSubstantial.reduce(
+      (sum, item) => sum + item.lengthRatio,
+      0,
+    );
+    const multiStrokeSuspicious = Boolean(
+      source.length >= DISPLACED_STROKE_MULTI_MIN_PHYSICAL_STROKES &&
+      displacedSubstantial.length >= DISPLACED_STROKE_SUSPICIOUS_MIN_COUNT &&
+      displacedCombinedRatio >= DISPLACED_STROKE_SUSPICIOUS_MIN_COMBINED_RATIO
+    );
+    const strongestPair = displacedSubstantial.slice(0, 2);
+    const multiStrokeHardReject = Boolean(
+      multiStrokeSuspicious &&
+      displacedCombinedRatio >= DISPLACED_STROKE_HARD_MIN_COMBINED_RATIO &&
+      strongestPair.length >= 2 &&
+      strongestPair.every((item) =>
+        item.coverage < 0.34 &&
+        item.meanDistance > 0.072 &&
+        (item.improvement > 0.004 || item.outsideRatio > 0.14)
+      )
+    );
+    const singleStrokeHardReject = Boolean(
       strongest &&
       strongest.lengthRatio >= 0.045 &&
       strongest.coverage < 0.24 &&
       strongest.meanDistance > 0.085 &&
       (strongest.improvement > 0.01 || strongest.outsideRatio > 0.22)
     );
+    const hardReject = singleStrokeHardReject || multiStrokeHardReject;
     const penalty = strongest
-      ? Math.min(1.9, strongest.severity * Math.min(1.4, strongest.lengthRatio * 8))
+      ? Math.min(
+          2.25,
+          strongest.severity * Math.min(1.4, strongest.lengthRatio * 8) +
+            (multiStrokeSuspicious ? Math.min(0.62, displacedCombinedRatio * 2.1) : 0),
+        )
       : 0;
-    const roundedSuspects = suspects.slice(0, 3).map((item) => Object.fromEntries(
+    const roundedSuspects = suspects.slice(0, 4).map((item) => Object.fromEntries(
       Object.entries(item).map(([key, value]) => [
         key,
         Number.isFinite(value) ? Math.round(value * 1000) / 1000 : value,
@@ -9856,6 +9896,10 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
     return {
       available: true,
       hardReject,
+      singleStrokeHardReject,
+      multiStrokeHardReject,
+      multiStrokeSuspicious,
+      displacedCombinedRatio: Math.round(displacedCombinedRatio * 1000) / 1000,
       penalty: Math.round(penalty * 1000) / 1000,
       suspects: roundedSuspects,
     };
@@ -10711,6 +10755,56 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
             glyphShape: { available: true, penalty: 0.4, score: 0.1 },
           }],
         }),
+      );
+      add(
+        "no-candidate-han-uses-endpoint-core-confirmation",
+        shouldTryRobustHanConfirmation({ accepted: [] }),
+      );
+      add(
+        "strong-han-skips-endpoint-core-confirmation",
+        !shouldTryRobustHanConfirmation({
+          accepted: [{
+            text: "感",
+            crossEngineConsensus: false,
+            independentVariantCount: 2,
+            glyphShape: {
+              available: true,
+              penalty: 0.32,
+              score: 0.09,
+              displacedStroke: { multiStrokeSuspicious: false },
+            },
+          }],
+          margin: 2.1,
+        }),
+      );
+      const displacedMismatchEvaluation = {
+        accepted: [{
+          text: "乳",
+          score: 0.2,
+          crossEngineConsensus: false,
+          independentVariantCount: 2,
+          glyphShape: {
+            available: true,
+            penalty: 0.28,
+            score: 0.1,
+            displacedStroke: { multiStrokeSuspicious: true },
+          },
+        }],
+        margin: 2,
+        sourceGroups: [
+          { source: "google", variant: "raw", candidates: ["乳"] },
+          { source: "google", variant: "normalized", candidates: ["乳"] },
+        ],
+      };
+      add(
+        "multi-stroke-glyph-mismatch-forces-robust-confirmation",
+        shouldTryRobustHanConfirmation(displacedMismatchEvaluation),
+        displacedMismatchEvaluation,
+      );
+      add(
+        "multi-stroke-glyph-mismatch-forces-local-han-tiebreaker",
+        shouldTryLocalHanFallback(displacedMismatchEvaluation),
+        displacedMismatchEvaluation,
       );
       add(
         "close-runner-up-single-han-requests-verification",
@@ -14836,6 +14930,31 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
         RECOGNITION_ADDITIONAL_VARIANT_BONUS;
   }
 
+  function hasSuspiciousMultiStrokeGlyphMismatch(evaluation) {
+    const top = evaluation?.accepted?.[0];
+    return Boolean(
+      top &&
+      isCjkIdeograph(top.text) &&
+      top.glyphShape?.available &&
+      top.glyphShape?.displacedStroke?.multiStrokeSuspicious
+    );
+  }
+
+  function shouldTryRobustHanConfirmation(evaluation) {
+    if (isReadingResponse() || isFreeMode()) {
+      return false;
+    }
+    if (!evaluation?.accepted?.[0]) {
+      // 生の座標と単純正規化の双方で候補が残らない場合だけ、
+      // 端点を少し削った第3変形を試す。成功例の通常経路には入らない。
+      return true;
+    }
+    return (
+      shouldConfirmWeakHanVariantConsensus(evaluation) ||
+      hasSuspiciousMultiStrokeGlyphMismatch(evaluation)
+    );
+  }
+
   function shouldTryLocalHanFallback(evaluation) {
     if (isReadingResponse() || isFreeMode()) return false;
     const top = evaluation?.accepted?.[0];
@@ -14846,6 +14965,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
       !isCjkIdeograph(top.text) ||
       !topIsProjectHan ||
       (top.glyphShape?.available && top.glyphShape.penalty >= 0.54) ||
+      hasSuspiciousMultiStrokeGlyphMismatch(evaluation) ||
       hasGoogleHanVariantDisagreement(evaluation)
     );
   }
@@ -15888,7 +16008,7 @@ window.JP_STROKE_COUNTS = {"0":2,"1":1,"2":1,"3":2,"4":2,"5":2,"6":2,"7":2,"8":2
           ensembleEvaluation = inContext(() => evaluateCandidateEnsemble(sourceGroups, strokeStats));
         }
 
-        if (inContext(() => shouldConfirmWeakHanVariantConsensus(ensembleEvaluation))) {
+        if (inContext(() => shouldTryRobustHanConfirmation(ensembleEvaluation))) {
           recognitionPath += "+google-confirmation";
           const confirmationStrokes = buildRobustRecognitionConfirmationStrokes(
             recognitionStrokes,
